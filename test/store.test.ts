@@ -568,6 +568,9 @@ describe("store", () => {
       message("abcsharp", "2026-10-23 abc#", "2026-10-30T09:00:00Z"),
       message("dash", "2026-10-23 -report note", "2026-10-31T09:00:00Z"),
       message("ell", "2026-10-23 ...report note", "2026-11-01T09:00:00Z"),
+      message("guillemets", "2026-10-23 «report» note", "2026-11-02T09:00:00Z"),
+      message("ellipsis", "2026-10-23 report… note", "2026-11-03T09:00:00Z"),
+      message("slash", "2026-10-23 report/ note", "2026-11-04T09:00:00Z"),
       { ...message("fromDate", "no date in text", "2026-10-28T09:00:00Z"), from: "2026-10-23@example.com" },
     ])
     expect(store.search("2026-10-23 unique", 10).map((item) => item.id)).toEqual(["alice"])
@@ -592,6 +595,9 @@ describe("store", () => {
     expect(store.search("2026-10-23 C#", 10).map((item) => item.id)).toEqual(["csharp"])
     expect(store.search("2026-10-23 -report", 10).map((item) => item.id)).toContain("quote")
     expect(store.search("2026-10-23 ...report", 10).map((item) => item.id)).toContain("quote")
+    expect(store.search("2026-10-23 «report»", 10).map((item) => item.id)).toContain("guillemets")
+    expect(store.search("2026-10-23 report…", 10).map((item) => item.id)).toContain("ellipsis")
+    expect(store.search("2026-10-23 report/", 10).map((item) => item.id)).toContain("slash")
     expect(store.search("2026-10-23", 30).map((item) => item.id)).toContain("fromDate")
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })

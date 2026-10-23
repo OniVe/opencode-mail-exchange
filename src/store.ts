@@ -531,8 +531,11 @@ export function openStore(config: MailConfig): Store | undefined {
           .toLowerCase()
           .split(/\s+/)
           .map((token) => {
-            const trimmed = token.replace(/^[^\p{L}\p{N}]+|[)"'\]}.,;:!?]+$/gu, "")
-            return trimmed || token
+            const leading = token.replace(/^[^\p{L}\p{N}]+/gu, "")
+            if (!leading) return token
+            const meaningful = leading.match(/[+#&]+$/)?.[0] ?? ""
+            const base = leading.replace(/[^\p{L}\p{N}]+$/gu, "")
+            return `${base}${meaningful}` || token
           })
           .filter(Boolean)
       : []
