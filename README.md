@@ -166,7 +166,7 @@ Top-level options are inherited by `accounts[]`; per-account values win, except 
 | `mail_accounts` | list accounts (id, address, EWS URL, storage mode) |
 | `mail_folders` | folders with unread/total |
 | `mail_list` | messages in a folder (metadata, paging) |
-| `mail_search` | local FTS, EWS fallback |
+| `mail_search` | local FTS + EWS body search (Inbox), merged and deduplicated |
 | `mail_get` | message + body; `fetched` / `bodyCached` |
 | `mail_sync` | incremental `SyncFolderItems`; `{synced, complete}` |
 | `mail_draft` | create a draft |
@@ -178,8 +178,9 @@ Permissions: `mail.read` (read tools), `mail.draft`, `mail.send`.
 `account` selects the mailbox; the first account is the default.
 `codemode: false` (default) lists tools directly; `codemode: true` exposes them only through `execute`.
 
-Search scope: local FTS covers `inbox`, `sent`, `drafts`, `deleted`; the EWS fallback searches `Inbox` only.
-Other folders are not searched.
+Search scope: every search merges local FTS (`inbox`, `sent`, `drafts`, `deleted`) with the EWS subject/body
+search in `Inbox`, deduplicating by id. Other folders are not covered by the EWS half. Expect one EWS call
+(~0.5 s) per search.
 
 Runtime note: tool names, `codemode` visibility and permission enforcement are defined by `@opencode/plugin`
 (2.0.26). Live verification in a running OpenCode session is tracked as R5 in

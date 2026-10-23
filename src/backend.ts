@@ -93,6 +93,37 @@ const folderKey = (folder: string | undefined): string => {
 
 const MAIL_FOLDERS = new Set(["wk:inbox", "wk:sent", "wk:drafts", "wk:deleted"])
 
+/**
+ * Local FTS covers four indexed folders; the EWS fallback covers Inbox subject/body.
+ * Merge both so a cached body cannot hide an uncached match.
+ */
+export function mergeSearchResults(
+  local: readonly MessageSummary[],
+  remote: readonly MessageSummary[],
+  limit: number,
+): MessageSummary[] {
+  const byId = new Map<string, MessageSummary>()
+  for (const message of local) byId.set(message.id, message)
+  for (const message of remote) {
+    const existing = byId.get(message.id)
+    if (!existing) {
+      byId.set(message.id, message)
+      continue
+    }
+    byId.set(message.id, {
+      ...existing,
+      to: existing.to.length > 0 ? existing.to : message.to,
+      cc: existing.cc && existing.cc.length > 0 ? existing.cc : message.cc,
+      recipientsKnown: existing.recipientsKnown === true || message.recipientsKnown === true,
+      preview: existing.preview || message.preview,
+      hasAttachments: existing.hasAttachments || message.hasAttachments,
+    })
+  }
+  return [...byId.values()]
+    .sort((a, b) => (Date.parse(b.received) || 0) - (Date.parse(a.received) || 0) || a.id.localeCompare(b.id))
+    .slice(0, limit)
+}
+
 const safe = <T>(read: () => T, fallback: T): T => {
   try {
     return read() ?? fallback
@@ -278,21 +309,28 @@ export class EwsBackend implements MailBackend {
   }
 
   async searchMessages(input: { query: string; limit: number }): Promise<MessageSummary[]> {
-    if (this.store && this.store.count() > 0) {
-      const cached = this.store.search(input.query, input.limit)
-      if (cached.length > 0) return this.withRecipients(cached)
-    }
+    const local = this.store && this.store.count() > 0 ? this.store.search(input.query, input.limit) : []
 
     // The filter value lands in a SOAP text node: `R&D` breaks the request unless escaped.
     const query = escapeXml(input.query)
-    const filter = new SearchFilter.SearchFilterCollection(LogicalOperator.Or, [
-      new SearchFilter.ContainsSubstring(ItemSchema.Subject, query),
-      new SearchFilter.ContainsSubstring(ItemSchema.Body, query),
-    ])
-    const page = await this.service.FindItems(WellKnownFolderName.Inbox, filter, new ItemView(input.limit))
-    if (page.Items.length === 0) return []
-    await this.service.LoadPropertiesForItems(page.Items, MESSAGE_PROPERTY_SET)
-    return page.Items.map((item) => toSummary(item, undefined, true))
+    let remote: MessageSummary[] = []
+    try {
+      const filter = new SearchFilter.SearchFilterCollection(LogicalOperator.Or, [
+        new SearchFilter.ContainsSubstring(ItemSchema.Subject, query),
+        new SearchFilter.ContainsSubstring(ItemSchema.Body, query),
+      ])
+      const page = await this.service.FindItems(WellKnownFolderName.Inbox, filter, new ItemView(input.limit))
+      if (page.Items.length > 0) {
+        await this.service.LoadPropertiesForItems(page.Items, MESSAGE_PROPERTY_SET)
+        remote = page.Items.map((item) => toSummary(item, undefined, true))
+      }
+    } catch (error) {
+      // Local FTS may still have useful results when EWS search is unavailable.
+      if (local.length === 0) throw error
+      console.warn(`[mail.exchange] EWS search failed; returning local FTS results: ${String(error)}`)
+    }
+
+    return this.withRecipients(mergeSearchResults(local, remote, input.limit))
   }
 
   async getMessage(input: { id: string }): Promise<MessageDetail> {

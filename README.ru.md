@@ -166,7 +166,7 @@ URL, логин и пароль не имеют значений по умолч
 | `mail_accounts` | список аккаунтов (id, адрес, EWS URL, режим хранения) |
 | `mail_folders` | папки с unread/total |
 | `mail_list` | письма в папке (метаданные, пагинация) |
-| `mail_search` | локальный FTS, fallback EWS |
+| `mail_search` | локальный FTS + EWS-поиск по телу (Inbox), merge и дедупликация |
 | `mail_get` | письмо + тело; `fetched` / `bodyCached` |
 | `mail_sync` | инкрементальный `SyncFolderItems`; `{synced, complete}` |
 | `mail_draft` | создать черновик |
@@ -178,8 +178,9 @@ URL, логин и пароль не имеют значений по умолч
 `account` выбирает ящик; по умолчанию первый аккаунт.
 `codemode: false` (default) — tools видны напрямую; `codemode: true` — только через `execute`.
 
-Область поиска: локальный FTS покрывает `inbox`, `sent`, `drafts`, `deleted`; EWS-fallback ищет только `Inbox`.
-Остальные папки не ищутся.
+Область поиска: каждый поиск объединяет локальный FTS (`inbox`, `sent`, `drafts`, `deleted`) с EWS-поиском
+по subject/body в `Inbox`, дедупликация по id. Остальные папки EWS-половиной не покрываются. Один EWS-запрос
+(~0.5 с) на поиск.
 
 Runtime-оговорка: имена tools, видимость `codemode` и permission-гейт определяются `@opencode/plugin` 2.0.26.
 Живая проверка в сессии OpenCode — R5 в [docs/roadmap.md](docs/roadmap.md), пока не выполнена.
