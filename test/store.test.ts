@@ -752,6 +752,16 @@ describe("store", () => {
     rmSync(config.dataDir, { recursive: true, force: true })
   })
 
+  test("a malformed time inside date+text stays textual", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [message("textMin", "2026-10-23 report T10:0 note", "2026-10-10T09:00:00Z")])
+    expect(store.search("2026-10-23 report T10:0", 10).map((item) => item.id)).toEqual(["textMin"])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
   test("ISO end-of-day 24:00 matches its date", () => {
     const config = baseConfig()
     const store = openStore(config)
@@ -759,11 +769,17 @@ describe("store", () => {
     store.upsertMessages("wk:inbox", [
       message("t24", "2026-10-23T24:00", "2026-10-10T09:00:00Z"),
       message("t2430", "2026-10-23T24:30", "2026-10-11T09:00:00Z"),
+      message("t24frac", "2026-10-23T24:00:00.500Z", "2026-10-12T09:00:00Z"),
+      message("bare24", "2026-10-23T24", "2026-10-13T09:00:00Z"),
     ])
     expect(store.search("2026-10-23", 10).map((item) => item.id)).toEqual(["t24"])
     expect(store.search("2026-10-23T24:00", 10).map((item) => item.id)).toEqual(["t24"])
-    // 24:30 is not a valid ISO time.
+    // 24:30 and a non-zero fraction are not valid ISO times; a bare hour is not 24:00.
     expect(store.search("2026-10-23T24:30", 10)).toEqual([])
+    expect(store.search("2026-10-23T24:00:00.500Z", 10)).toEqual([])
+    expect(store.search("2026-10-23T24", 10)).toEqual([])
+    // A non-finite limit must not return everything.
+    expect(store.search("2026-10-23", Number.NaN)).toEqual([])
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
@@ -836,7 +852,7 @@ describe("store", () => {
     const elapsed = performance.now() - started
     expect(found).toHaveLength(20)
     // Generous bound: catches quadratic regressions, not CI jitter.
-    expect(elapsed).toBeLessThan(2000)
+    expect(elapsed).toBeLessThan(500)
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })

@@ -106,31 +106,42 @@ const HOURS = [
   ...Array.from({ length: 10 }, (_, hour) => String(hour)),
 ]
 
-/** ISO 8601 allows 24:00 as end-of-day, but only with zero minutes and seconds. */
-const isAllowedHour = (hour: number, minute?: string, second?: string, hminute?: string): boolean =>
-  hour < 24 ||
-  (hour === 24 &&
-    (minute === undefined || minute === "00") &&
+/** ISO 8601 allows 24:00 as end-of-day, but only with zero minutes, seconds and fraction. */
+const isAllowedHour = (
+  hour: number,
+  minute?: string,
+  second?: string,
+  hminute?: string,
+  fraction?: string,
+): boolean => {
+  if (hour < 24) return true
+  if (hour !== 24) return false
+  return (
+    minute === "00" &&
     (second === undefined || second === "00") &&
-    hminute === undefined)
+    hminute === undefined &&
+    (fraction === undefined || Number(fraction) === 0)
+  )
+}
 
 /** Parses a date or date-time query; invalid hours (24+) are not treated as dates. */
 const parseDateTime = (value: string): DateTimeParts | undefined => {
   const match =
-    /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[Tt](\d{1,2})(?::(\d{2})(?::(\d{2})(?:\.[0-9]+)?)?|[Hh](\d{2}))?([Zz]|[+-]\d{2}:?\d{2})?|[Zz])?$/.exec(
+    /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[Tt](\d{1,2})(?::(\d{2})(?::(\d{2})(?:\.(\d+))?)?|[Hh](\d{2}))?([Zz]|[+-]\d{2}:?\d{2})?|[Zz])?$/.exec(
       value,
     )
   if (!match) return undefined
   const hour = match[4]
   const minute = match[5]
   const seconds = match[6]
-  const hminute = match[7]
-  if (hour !== undefined && !isAllowedHour(Number(hour), minute, seconds, hminute)) return undefined
+  const fraction = match[7]
+  const hminute = match[8]
+  if (hour !== undefined && !isAllowedHour(Number(hour), minute, seconds, hminute, fraction)) return undefined
   if (minute !== undefined && Number(minute) > 59) return undefined
   if (seconds !== undefined && Number(seconds) > 59) return undefined
   if (hminute !== undefined && Number(hminute) > 59) return undefined
-  const mode = hour === undefined ? "all" : hminute !== undefined ? "hourH" : match[8] !== undefined ? "hourZ" : "hour"
-  const zoneRaw = match[8]
+  const mode = hour === undefined ? "all" : hminute !== undefined ? "hourH" : match[9] !== undefined ? "hourZ" : "hour"
+  const zoneRaw = match[9]
   const zone = zoneRaw === undefined ? undefined : /^[Zz]$/.test(zoneRaw) ? "Z" : "offset"
   const offset = zone === "offset" ? zoneRaw.replace(":", "") : undefined
   return { year: match[1], month: match[2], day: match[3], hour, minute, second: seconds, hminute, zone, offset, mode }
@@ -140,10 +151,12 @@ const parseDateTime = (value: string): DateTimeParts | undefined => {
 const parseSearchDate = (query: string): { date: DateTimeParts; text?: string; invalid?: boolean } | undefined => {
   const compact = parseDateTime(query.trim())
   if (compact) return { date: compact }
-  // A single-digit minute ("T10:0", "10:0") is malformed time: reject it instead of
-  // falling back to a literal text search.
+  // A single-digit minute ("T10:0", "10:0") is malformed time, but only when it is
+  // the whole query: a date+text query may legitimately contain such a literal.
   const shortMinute =
-    /[Tt]\d{1,2}:\d(?!\d)/.test(query) || /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\s+\d{1,2}:\d(?!\d)/.test(query)
+    /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:[Tt]\d{1,2}:\d(?!\d)(?::\d{1,2})?(?:[Zz]|[+-]\d{2}:?\d{2})?|\s+\d{1,2}:\d(?!\d)(?::\d{1,2})?(?:[Zz]|[+-]\d{2}:?\d{2})?)$/.test(
+      query.trim(),
+    )
   if (shortMinute) {
     const base = /^(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})/.exec(query.trim())?.[1]
     const baseDate = base ? parseDateTime(base) : undefined
@@ -163,7 +176,7 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string; i
     }
     const rest = compactPrefix[2]?.trim()
     const timeRest = rest
-      ? /^(\d{1,2})(?::(\d{2})(?::(\d{2})(?:\.\d+)?)?|[Hh](\d{2}))?([Zz]|[+-]\d{2}:?\d{2})?(?:\s+(.*))?$/.exec(rest)
+      ? /^(\d{1,2})(?::(\d{2})(?::(\d{2})(?:\.(\d+))?)?|[Hh](\d{2}))?([Zz]|[+-]\d{2}:?\d{2})?(?:\s+(.*))?$/.exec(rest)
       : undefined
     if (
       timeRest &&
@@ -171,14 +184,16 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string; i
         timeRest[3] !== undefined ||
         timeRest[4] !== undefined ||
         timeRest[5] !== undefined ||
+        timeRest[6] !== undefined ||
         /^\d{1,2}$/.test(rest ?? ""))
     ) {
       const hour = timeRest[1]
       const minute = timeRest[2]
       const seconds = timeRest[3]
-      const hminute = timeRest[4]
-      const zoneRaw = timeRest[5]
-      if (!isAllowedHour(Number(hour), minute, seconds, hminute)) return { date, invalid: true }
+      const fraction = timeRest[4]
+      const hminute = timeRest[5]
+      const zoneRaw = timeRest[6]
+      if (!isAllowedHour(Number(hour), minute, seconds, hminute, fraction)) return { date, invalid: true }
       if (minute !== undefined && Number(minute) > 59) return { date, invalid: true }
       if (hminute !== undefined && Number(hminute) > 59) return { date, invalid: true }
       const zone = zoneRaw === undefined ? undefined : /^[Zz]$/.test(zoneRaw) ? "Z" : "offset"
@@ -194,7 +209,7 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string; i
           offset,
           mode: hminute !== undefined ? "hourH" : zone !== undefined ? "hourZ" : "hour",
         },
-        text: timeRest[6]?.trim() || undefined,
+        text: timeRest[7]?.trim() || undefined,
       }
     }
     // A single or double-digit hour followed by text is still a time filter:
@@ -217,7 +232,7 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string; i
   const spaced = /^(\d{4})\s+(\d{1,2})\s+(\d{1,2})(?:\s+[Tt]?(\d{1,2})(?::(\d{2}))?)?(?:\s+(.*))?$/.exec(query.trim())
   if (!spaced) return undefined
   const hour = spaced[4]
-  if (hour !== undefined && Number(hour) > 23) return undefined
+  if (hour !== undefined && !isAllowedHour(Number(hour), spaced[5])) return undefined
   const minute = spaced[5]
   if (minute !== undefined && Number(minute) > 59) return undefined
   return {
@@ -232,6 +247,9 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string; i
     text: spaced[6]?.trim() || undefined,
   }
 }
+
+/** True when the query asks for a date-time that cannot exist (used to skip EWS). */
+export const isImpossibleDateQuery = (query: string): boolean => parseSearchDate(query)?.invalid === true
 
 interface ParsedTime {
   hour?: string
@@ -250,20 +268,21 @@ const parseTimeSuffix = (rest: string): ParsedTime | undefined => {
     return { zone: "Z" }
   }
   const match =
-    /^[Tt ]?(\d{1,2})(?::(\d{2})(?::(\d{2})(?:\.\d+)?)?|\.(\d{2})|[Hh](\d{2}))?([Zz]|[+-]\d{2}:?\d{2})?/.exec(rest)
+    /^[Tt ]?(\d{1,2})(?::(\d{2})(?::(\d{2})(?:\.(\d+))?)?|\.(\d{2})|[Hh](\d{2}))?([Zz]|[+-]\d{2}:?\d{2})?/.exec(rest)
   if (!match) return undefined
   const hour = Number(match[1])
-  const minute = match[2] ?? match[4]
-  const hminute = match[5]
+  const minute = match[2] ?? match[5]
+  const hminute = match[6]
   const seconds = match[3]
-  if (!isAllowedHour(hour, minute, seconds, hminute)) return undefined
+  const fraction = match[4]
+  if (!isAllowedHour(hour, minute, seconds, hminute, fraction)) return undefined
   if (minute !== undefined && Number(minute) > 59) return undefined
   if (hminute !== undefined && Number(hminute) > 59) return undefined
   if (seconds !== undefined && Number(seconds) > 59) return undefined
   const boundary = rest[match[0].length] ?? ""
   if (/[A-Za-z0-9]/.test(boundary)) return undefined
   if ((boundary === ":" || boundary === ".") && minute === undefined) return undefined
-  const zoneRaw = match[6]
+  const zoneRaw = match[7]
   const zone = zoneRaw === undefined ? undefined : /^[Zz]$/.test(zoneRaw) ? "Z" : "offset"
   const offset = zone === "offset" ? zoneRaw.replace(":", "") : undefined
   return { hour: match[1], minute, second: seconds, hminute, zone, offset }
@@ -710,14 +729,12 @@ export function openStore(config: MailConfig): Store | undefined {
           })
           .filter(Boolean)
       : []
-    const rows = db
-      .query(`
+    const stmt = db.prepare(`
         select m.*, b.body from messages m
         left join bodies b on b.message_id = m.id
         where m.deleted = 0 and (m.subject like ? or m.from_addr like ? or m.preview like ? or b.body like ?)
         order by m.received_ts desc, m.id asc
       `)
-      .all(pattern, pattern, pattern, pattern) as Array<MessageRow & { body: string | null }>
     const matchesNeedles = (lower: string): boolean =>
       needles.every((needle) => {
         if (needle.length > 256) return lower.includes(needle)
@@ -748,24 +765,31 @@ export function openStore(config: MailConfig): Store | undefined {
         ? new RegExp(`(^|[^0-9])${date.hour.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^0-9]|$)`)
         : undefined
     // Early exit: the query is ordered by received date, so once `take` matches are
-    // collected the remaining rows cannot change the page.
+    // collected the remaining rows cannot change the page. `iterate` avoids pulling
+    // every body into memory.
     const found: MessageSummary[] = []
-    for (const row of rows) {
-      const text = [row.subject, row.from_addr, row.preview, row.body ?? ""].join("\n")
-      // Ignore the date itself when matching text terms: "2026-10-23 10 report"
-      // must not satisfy "10" from the month.
-      const withoutDate = text.replace(new RegExp(DATE_TEXT.source, "gu"), " ").toLowerCase()
-      if (!matchesNeedles(withoutDate)) continue
-      const dateMatches = matchesDateText(text, date)
-      let matched = dateMatches
-      if (!matched && dateOnly && hourPattern) {
-        // "2026-10-23 5 items": the word terms must match, and the digit may be
-        // either an hour ("T05:00 items") or a literal count ("total 5 items").
-        matched = matchesDateText(text, dateOnly) && hourPattern.test(withoutDate)
+    try {
+      for (const row of stmt.iterate(pattern, pattern, pattern, pattern) as IterableIterator<
+        MessageRow & { body: string | null }
+      >) {
+        const text = [row.subject, row.from_addr, row.preview, row.body ?? ""].join("\n")
+        // Ignore the date itself when matching text terms: "2026-10-23 10 report"
+        // must not satisfy "10" from the month.
+        const withoutDate = text.replace(new RegExp(DATE_TEXT.source, "gu"), " ").toLowerCase()
+        if (!matchesNeedles(withoutDate)) continue
+        const dateMatches = matchesDateText(text, date)
+        let matched = dateMatches
+        if (!matched && dateOnly && hourPattern) {
+          // "2026-10-23 5 items": the word terms must match, and the digit may be
+          // either an hour ("T05:00 items") or a literal count ("total 5 items").
+          matched = matchesDateText(text, dateOnly) && hourPattern.test(withoutDate)
+        }
+        if (!matched) continue
+        found.push(rowToSummary(row))
+        if (found.length >= take) break
       }
-      if (!matched) continue
-      found.push(rowToSummary(row))
-      if (found.length >= take) break
+    } finally {
+      stmt.finalize()
     }
     return found
   }
@@ -788,7 +812,7 @@ export function openStore(config: MailConfig): Store | undefined {
       return (rows as MessageRow[]).map(rowToSummary)
     },
     search(query, limit) {
-      const take = Math.max(0, Math.trunc(limit))
+      const take = Number.isFinite(limit) ? Math.max(0, Math.trunc(limit)) : 0
       if (take === 0) return []
       // Date/time queries get a date-aware scan: FTS tokens cannot represent every
       // ISO variant (padding, Z, h-minutes) without combinatorial alternatives.

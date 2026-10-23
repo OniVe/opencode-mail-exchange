@@ -36,6 +36,7 @@ import {
   wellKnownFolder,
 } from "./ews"
 import type { Store } from "./store"
+import { isImpossibleDateQuery } from "./store"
 import type {
   CalendarEvent,
   ContactDto,
@@ -332,6 +333,9 @@ export class EwsBackend implements MailBackend {
     // A query made only of whitespace/controls/non-characters cannot be sent: the SOAP
     // element would have no value (or a blank one). There is nothing to search for.
     if (query === "") return this.withRecipients(local)
+    // An impossible date-time ("2026-10-23T10:00:60") has no local results; sending the
+    // raw string to EWS could return a literal match, so skip the remote half too.
+    if (isImpossibleDateQuery(input.query)) return this.withRecipients(local)
     let remote: MessageSummary[] = []
     try {
       const filter = new SearchFilter.SearchFilterCollection(LogicalOperator.Or, [
