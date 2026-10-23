@@ -109,7 +109,7 @@ const HOURS = [
 /** Parses a date or date-time query; invalid hours (24+) are not treated as dates. */
 const parseDateTime = (value: string): DateTimeParts | undefined => {
   const match =
-    /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[Tt](\d{1,2})(?::(\d{2})(?::(\d{2}))?|[Hh](\d{2}))?([Zz]|[+-]\d{2}:?\d{2})?|[Zz])?$/.exec(
+    /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[Tt](\d{1,2})(?::(\d{2})(?::(\d{2})(?:\.[0-9]+)?)?|[Hh](\d{2}))?([Zz]|[+-]\d{2}:?\d{2})?|[Zz])?$/.exec(
       value,
     )
   if (!match) return undefined
@@ -129,69 +129,73 @@ const parseDateTime = (value: string): DateTimeParts | undefined => {
 }
 
 /** Date-only or date-time query, including the whitespace form "2026 10 23". */
-const parseSearchDate = (query: string): { date: DateTimeParts; text?: string } | undefined => {
+const parseSearchDate = (query: string): { date: DateTimeParts; text?: string; invalid?: boolean } | undefined => {
   const compact = parseDateTime(query.trim())
   if (compact) return { date: compact }
   const compactPrefix =
-    /^(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:[Tt]\d{1,2}(?::\d{2}|[Hh]\d{2})?(?:[Zz]|[+-]\d{2}:?\d{2})?)?)(?:\s+(.*))?$/.exec(
+    /^(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:[Tt]\d{1,2}(?::\d{2}(?::\d{2}(?:\.[0-9]+)?)?|[Hh]\d{2})?(?:[Zz]|[+-]\d{2}:?\d{2})?)?)(?:\s+(.*))?$/.exec(
       query.trim(),
     )
   if (compactPrefix) {
     const date = parseDateTime(compactPrefix[1])
-    if (date) {
-      const rest = compactPrefix[2]?.trim()
-      const timeRest = rest
-        ? /^(\d{1,2})(?::(\d{2})(?::(\d{2})(?:\.\d+)?)?|[Hh](\d{2}))?([Zz]|[+-]\d{2}:?\d{2})?(?:\s+(.*))?$/.exec(rest)
-        : undefined
-      if (
-        timeRest &&
-        (timeRest[2] !== undefined ||
-          timeRest[3] !== undefined ||
-          timeRest[4] !== undefined ||
-          timeRest[5] !== undefined ||
-          /^\d{1,2}$/.test(rest ?? ""))
-      ) {
-        const hour = timeRest[1]
-        const minute = timeRest[2]
-        const seconds = timeRest[3]
-        const hminute = timeRest[4]
-        const zoneRaw = timeRest[5]
-        if (Number(hour) > 23 || (minute !== undefined && Number(minute) > 59)) return undefined
-        if (seconds !== undefined && Number(seconds) > 59) return undefined
-        if (hminute !== undefined && Number(hminute) > 59) return undefined
-        const zone = zoneRaw === undefined ? undefined : /^[Zz]$/.test(zoneRaw) ? "Z" : "offset"
-        const offset = zone === "offset" ? zoneRaw?.replace(":", "") : undefined
-        return {
-          date: {
-            ...date,
-            hour,
-            minute,
-            second: seconds,
-            hminute,
-            zone,
-            offset,
-            mode: hminute !== undefined ? "hourH" : zone !== undefined ? "hourZ" : "hour",
-          },
-          text: timeRest[6]?.trim() || undefined,
-        }
-      }
-      // A single or double-digit hour followed by text is still a time filter:
-      // "2026-10-23 9 report" and "2026-10-23 10 report" both work.
-      const leadingHour = /^(\d{1,2})(?:\s+(.*))?$/.exec(rest ?? "")
-      if (leadingHour && Number(leadingHour[1]) <= 23) {
-        return {
-          date: {
-            ...date,
-            hour: leadingHour[1],
-            mode: "hour",
-            // "5 items" may be a count, not a time: text matches stay valid too.
-            ambiguousHour: leadingHour[1].length === 1,
-          },
-          text: leadingHour[2]?.trim() || undefined,
-        }
-      }
-      return { date, text: rest || undefined }
+    if (!date) {
+      // The prefix looked like a date-time but had invalid components: report an
+      // impossible query instead of falling back to a literal text search.
+      const baseDate = parseDateTime(compactPrefix[1].replace(/[Tt].*$/, ""))
+      return baseDate ? { date: baseDate, invalid: true } : undefined
     }
+    const rest = compactPrefix[2]?.trim()
+    const timeRest = rest
+      ? /^(\d{1,2})(?::(\d{2})(?::(\d{2})(?:\.\d+)?)?|[Hh](\d{2}))?([Zz]|[+-]\d{2}:?\d{2})?(?:\s+(.*))?$/.exec(rest)
+      : undefined
+    if (
+      timeRest &&
+      (timeRest[2] !== undefined ||
+        timeRest[3] !== undefined ||
+        timeRest[4] !== undefined ||
+        timeRest[5] !== undefined ||
+        /^\d{1,2}$/.test(rest ?? ""))
+    ) {
+      const hour = timeRest[1]
+      const minute = timeRest[2]
+      const seconds = timeRest[3]
+      const hminute = timeRest[4]
+      const zoneRaw = timeRest[5]
+      if (Number(hour) > 23 || (minute !== undefined && Number(minute) > 59)) return { date, invalid: true }
+      if (seconds !== undefined && Number(seconds) > 59) return { date, invalid: true }
+      if (hminute !== undefined && Number(hminute) > 59) return { date, invalid: true }
+      const zone = zoneRaw === undefined ? undefined : /^[Zz]$/.test(zoneRaw) ? "Z" : "offset"
+      const offset = zone === "offset" ? zoneRaw?.replace(":", "") : undefined
+      return {
+        date: {
+          ...date,
+          hour,
+          minute,
+          second: seconds,
+          hminute,
+          zone,
+          offset,
+          mode: hminute !== undefined ? "hourH" : zone !== undefined ? "hourZ" : "hour",
+        },
+        text: timeRest[6]?.trim() || undefined,
+      }
+    }
+    // A single or double-digit hour followed by text is still a time filter:
+    // "2026-10-23 9 report" and "2026-10-23 10 report" both work.
+    const leadingHour = /^(\d{1,2})(?:\s+(.*))?$/.exec(rest ?? "")
+    if (leadingHour && Number(leadingHour[1]) <= 23) {
+      return {
+        date: {
+          ...date,
+          hour: leadingHour[1],
+          mode: "hour",
+          // "5 items" may be a count, not a time: text matches stay valid too.
+          ambiguousHour: leadingHour[1].length === 1,
+        },
+        text: leadingHour[2]?.trim() || undefined,
+      }
+    }
+    return { date, text: rest || undefined }
   }
   const spaced = /^(\d{4})\s+(\d{1,2})\s+(\d{1,2})(?:\s+[Tt]?(\d{1,2})(?::(\d{2}))?)?(?:\s+(.*))?$/.exec(query.trim())
   if (!spaced) return undefined
@@ -468,8 +472,12 @@ const splitMixedNeedle = (needle: string): MixedPart[] => {
  * the next token. "C++" therefore cannot match "C# +" or "C + D".
  */
 const matchesMixedNeedle = (text: string, needle: string): boolean => {
-  // A numeric-first term also matches inside a token ("1.2" in "v1.2").
-  if (/^\d/.test(needle) && text.includes(needle)) return true
+  // A numeric-first term also matches inside a token ("1.2" in "v1.2"), but only
+  // at a number boundary: "1.2" must not match "11.2".
+  if (/^\d/.test(needle)) {
+    const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    if (new RegExp(`(^|[^0-9])${escaped}`).test(text)) return true
+  }
   const parts = splitMixedNeedle(needle)
   if (parts.length === 0) return text.includes(needle)
   const chunks = text.split(/([^\p{L}\p{N}]+)/u)
@@ -685,9 +693,6 @@ export function openStore(config: MailConfig): Store | undefined {
           })
           .filter(Boolean)
       : []
-    // An ambiguous single-digit hour ("5 items") keeps its digit as a text term too,
-    // so both the hour reading and the literal phrase can match.
-    const effectiveNeedles = date.ambiguousHour && date.hour !== undefined ? [date.hour, ...needles] : needles
     const rows = db
       .query(`
         select m.*, b.body from messages m
@@ -697,7 +702,7 @@ export function openStore(config: MailConfig): Store | undefined {
       `)
       .all(pattern, pattern, pattern, pattern) as Array<MessageRow & { body: string | null }>
     const matchesNeedles = (lower: string): boolean =>
-      effectiveNeedles.every((needle) => {
+      needles.every((needle) => {
         if (needle.length > 256) return lower.includes(needle)
         const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
         if (/^\d+$/.test(needle)) {
@@ -717,9 +722,9 @@ export function openStore(config: MailConfig): Store | undefined {
         // must not satisfy "10" from the month.
         const withoutDate = text.replace(new RegExp(DATE_TEXT.source, "gu"), " ")
         const textMatches = matchesNeedles(withoutDate.toLowerCase())
-        if (date.ambiguousHour && effectiveNeedles.length > 0) {
-          // "2026-10-23 5 items" may mean hour 5 or the phrase "5 items": accept
-          // either reading, as long as the date itself is present.
+        if (date.ambiguousHour) {
+          // "2026-10-23 5 items": the word terms must match, and the digit may be
+          // either an hour ("T05:00 items") or a literal count ("total 5 items").
           const dateOnly: DateTimeParts = {
             ...date,
             hour: undefined,
@@ -730,7 +735,11 @@ export function openStore(config: MailConfig): Store | undefined {
             offset: undefined,
             mode: "all",
           }
-          return matchesDateText(text, dateOnly) && (dateMatches || textMatches)
+          if (!matchesDateText(text, dateOnly) || !textMatches) return false
+          if (dateMatches) return true
+          const hour = date.hour ?? ""
+          const escapedHour = hour.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+          return new RegExp(`(^|[^0-9])${escapedHour}([^0-9]|$)`).test(withoutDate.toLowerCase())
         }
         return dateMatches && textMatches
       })
@@ -761,6 +770,8 @@ export function openStore(config: MailConfig): Store | undefined {
       // Date/time queries get a date-aware scan: FTS tokens cannot represent every
       // ISO variant (padding, Z, h-minutes) without combinatorial alternatives.
       const dateQuery = parseSearchDate(query)
+      // A date-time with invalid components is an impossible query, not text.
+      if (dateQuery?.invalid) return []
       if (dateQuery) return searchByDate(dateQuery.date, take, dateQuery.text)
       const queries = ftsQueries(query)
       if (!queries) return []

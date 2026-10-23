@@ -601,6 +601,7 @@ describe("store", () => {
     expect(store.search("2026-10-23 ...report", 30).map((item) => item.id)).toContain("quote")
     expect(store.search("2026-10-23 «report»", 30).map((item) => item.id)).toContain("guillemets")
     expect(store.search("2026-10-23 report…", 30).map((item) => item.id)).toContain("ellipsis")
+    expect(store.search("2026-10-23 report/", 30).map((item) => item.id)).toContain("slash")
     expect(store.search("2026-10-23 (C++)", 10).map((item) => item.id)).toEqual(["cppSpaced", "cpp"])
     expect(store.search("2026-10-23 C++.", 10).map((item) => item.id)).toEqual(["cppSpaced", "cpp"])
     expect(store.search("2026-10-23 C#,", 10).map((item) => item.id)).toEqual(["csharp"])
@@ -662,6 +663,7 @@ describe("store", () => {
       message("prose", "2026-10-23 total 5 items", "2026-10-10T09:00:00Z"),
       message("time5", "2026-10-23 5 items", "2026-10-11T09:00:00Z"),
       message("t15", "2026-10-23T15:00 items", "2026-10-12T09:00:00Z"),
+      message("h5only", "2026-10-23T05:00 report", "2026-10-13T09:00:00Z"),
     ])
     expect(
       store
@@ -682,15 +684,28 @@ describe("store", () => {
       message("z", "2026-10-23T10:30Z", "2026-10-10T09:00:00Z"),
       message("off", "2026-10-23T10:30+02:00", "2026-10-11T09:00:00Z"),
       message("ms", "2026-10-23T10:30:15.000Z", "2026-10-12T09:00:00Z"),
+      message("ms2", "2026-10-23T10:30:15.500Z", "2026-10-13T09:00:00Z"),
     ])
     expect(
       store
         .search("2026-10-23 10:30Z", 10)
         .map((item) => item.id)
         .sort(),
-    ).toEqual(["ms", "z"])
+    ).toEqual(["ms", "ms2", "z"])
     expect(store.search("2026-10-23 10:30+02:00", 10).map((item) => item.id)).toEqual(["off"])
-    expect(store.search("2026-10-23 10:30:15.000Z", 10).map((item) => item.id)).toEqual(["ms"])
+    expect(
+      store
+        .search("2026-10-23 10:30:15.000Z", 10)
+        .map((item) => item.id)
+        .sort(),
+    ).toEqual(["ms", "ms2"])
+    // The compact form accepts fractional seconds too.
+    expect(
+      store
+        .search("2026-10-23T10:30:15.000Z", 10)
+        .map((item) => item.id)
+        .sort(),
+    ).toEqual(["ms", "ms2"])
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
@@ -703,6 +718,7 @@ describe("store", () => {
       message("v12", "2026-10-23 v1.2 release", "2026-10-10T09:00:00Z"),
       message("v123", "2026-10-23 v1.2.3 release", "2026-10-11T09:00:00Z"),
       message("num", "2026-10-23 1.2", "2026-10-12T09:00:00Z"),
+      message("v112", "2026-10-23 11.2 value", "2026-10-13T09:00:00Z"),
     ])
     expect(
       store
@@ -727,6 +743,7 @@ describe("store", () => {
     expect(store.search("2026-10-23T10:00", 10)).toEqual([])
     // The whitespace form validates seconds too: parity with the compact form.
     expect(store.search("2026-10-23 10:00:60", 10)).toEqual([])
+    expect(store.search("2026-10-23T10:00:60", 10)).toEqual([])
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
@@ -786,7 +803,10 @@ describe("store", () => {
     const config = baseConfig()
     const store = openStore(config)
     if (!store) throw new Error("store expected")
-    store.upsertMessages("wk:inbox", [message("p", "2026-10-23", "2026-10-10T09:00:00Z")])
+    store.upsertMessages("wk:inbox", [message("p", `2026-10-23 ${"!-".repeat(300)}`, "2026-10-10T09:00:00Z")])
+    // 300 '!' exceed the 256-char cap, so the linear `includes` path is used: the
+    // symbols are not contiguous in the text, hence no match.
+    expect(store.search(`2026-10-23 ${"!".repeat(300)}`, 5)).toEqual([])
     expect(store.search(`2026-10-23 ${"!".repeat(30000)}`, 5)).toEqual([])
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
