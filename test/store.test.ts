@@ -156,11 +156,32 @@ describe("resolveConfig", () => {
     expect(resolveConfig({ ...base, storage: "full" }, {}).storage).toBe("full")
   })
 
-  test("truncates fractional numeric options", () => {
+  test("truncates fractional numeric options and keeps them at least 1", () => {
     const base = { ewsUrl: "https://mail/EWS/Exchange.asmx", username: "D\\u", password: "p" }
     const config = resolveConfig({ ...base, maxMessages: 1.9, requestTimeoutMs: 2.7 }, {})
     expect(config.maxMessages).toBe(1)
     expect(config.requestTimeoutMs).toBe(2)
+    const tiny = resolveConfig({ ...base, retentionDays: 0.5, maxBodyBytes: 0.5 }, {})
+    expect(tiny.retentionDays).toBe(1)
+    expect(tiny.maxBodyBytes).toBe(1)
+  })
+
+  test("rejects a missing caFile and reads env fallbacks", () => {
+    const base = { ewsUrl: "https://mail/EWS/Exchange.asmx", username: "D\\u", password: "p" }
+    expect(() => resolveConfig({ ...base, caFile: "C:/definitely/missing.pem" }, {})).toThrow(ConfigError)
+    const config = resolveConfig(
+      {},
+      {
+        MAIL_EWS_URL: "https://env.example.com/EWS/Exchange.asmx",
+        MAIL_USER: "D\\u",
+        MAIL_PASSWORD: "p",
+        MAIL_SELF: "bot@example.com",
+        MAIL_DATA_DIR: "C:/tmp/mail-data",
+      },
+    )
+    expect(config.ewsUrl).toBe("https://env.example.com/EWS/Exchange.asmx")
+    expect(config.selfAddress).toBe("bot@example.com")
+    expect(config.dataDir).toBe("C:/tmp/mail-data")
   })
 
   test("parses booleans case-insensitively", () => {

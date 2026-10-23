@@ -41,7 +41,7 @@ const asNumber = (value: unknown, fallback: number): number => {
   return Number.isFinite(n) && n > 0 ? n : fallback
 }
 
-const asInt = (value: unknown, fallback: number): number => Math.trunc(asNumber(value, fallback))
+const asInt = (value: unknown, fallback: number): number => Math.max(1, Math.trunc(asNumber(value, fallback)))
 
 const TRUE_VALUES = new Set(["true", "1", "yes", "on"])
 const FALSE_VALUES = new Set(["false", "0", "no", "off"])

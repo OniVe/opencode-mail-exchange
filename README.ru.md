@@ -29,10 +29,19 @@
   - [Синхронизация](#синхронизация)
 - [Хранение](#хранение)
 - [Лимиты](#лимиты)
+- [Не реализовано](#не-реализовано)
 - [Roadmap](#roadmap)
 - [Риски](#риски)
 - [Разработка](#разработка)
 - [Лицензия](#лицензия)
+
+## Возможности
+
+- 10 `mail_*` tools: аккаунты, папки, список, поиск, чтение, sync, черновик, отправка, календарь, контакты.
+- Несколько ящиков в одном процессе: свои credentials и SQLite на аккаунт.
+- Локальный SQLite-индекс (WAL, FTS5) в режимах `off` / `metadata` / `full`.
+- EWS/NTLM с явным XML-экранированием, валидацией получателей и лимитами вложений.
+- Таймаут и отмена запроса через `context.signal`; маршрутизация аккаунтов через `AsyncLocalStorage`.
 
 ## О плагине
 
@@ -40,7 +49,7 @@
 Работает внутри OpenCode V2 как нативный TypeScript-плагин: Bun исполняет `src/index.ts` напрямую, сборка не нужна.
 
 Проверено на Exchange 2016 (build 15.1.2507.6), NTLMv2, внутренний CA. Bun 1.4.2, `@opencode/plugin` 2.0.26,
-76 тестов.
+77 тестов.
 
 ### Стек
 
@@ -55,8 +64,8 @@
 
 ### Требования
 
-- OpenCode V2 (проверено на `opencode v2.0.26`)
-- Bun 1.4+
+- OpenCode V2 с `@opencode/plugin` 2.0.26 (живая проверка в сессии — R5 — пока не выполнена)
+- Bun 1.4.2 (проверено)
 - Exchange on-prem с включённым EWS и доменной NTLM-учётной записью
 - `NODE_EXTRA_CA_CERTS` с PEM корневого CA, если EWS за внутренним CA
 
@@ -106,7 +115,8 @@ export NODE_EXTRA_CA_CERTS='/path/to/root-ca.pem'   # только для вну
 ```
 
 `MAIL_PASSWORD` — fallback, если per-account переменная не задана. `<ID>` — id аккаунта в верхнем регистре,
-не-алфанумерика заменяется на `_`; автоматические id — `account-1`, `account-2`, …
+не-алфанумерика заменяется на `_`; единственный аккаунт получает `default`, несколько без явных id —
+`account-1`, `account-2`, …
 
 Без `NODE_EXTRA_CA_CERTS` Bun не доверяет внутреннему CA; симптом — непрозрачный
 `undefined is not an object (evaluating 'response.headers')` из `@ewsjs/xhr`, а не `UNABLE_TO_VERIFY_LEAF_SIGNATURE`.
@@ -125,7 +135,7 @@ URL, логин и пароль не имеют значений по умолч
 | `selfAddress` | `MAIL_SELF` | часть username (локальная часть, не адрес) | адрес ящика |
 | `storage` | `MAIL_STORAGE` | `metadata` | `off` / `metadata` / `full`; неизвестное значение — `ConfigError` |
 | `dataDir` | `MAIL_DATA_DIR` | `%LOCALAPPDATA%\opencode\mail-exchange\<hash>` / `~/.local/share/...` | корень; при `accounts` — `<dataDir>/<id>`, если аккаунт не задал свой `dataDir`; `<hash>` = `sha256(lowercase username)[:16]` |
-| `maxMessages` | `MAIL_MAX_MESSAGES` | 2000 (max 20000) | размер локального индекса; целое |
+| `maxMessages` | `MAIL_MAX_MESSAGES` | 2000 (max 20000) | размер локального индекса; дробное усекается, минимум 1 |
 | `retentionDays` | `MAIL_RETENTION_DAYS` | 365 (max 3650) | TTL записей |
 | `maxBodyBytes` | `MAIL_MAX_BODY_BYTES` | 100000 (max 1 000 000) | обрезка тела, байты UTF-8 |
 | `syncIntervalMinutes` | `MAIL_SYNC_INTERVAL_MINUTES` | 5 (max 1440) | период обновления индекса |
@@ -212,6 +222,13 @@ SQLite (`bun:sqlite`, WAL, FTS5) в `dataDir`; при `accounts` — `<dataDir>/
   ~0.45 с (live).
 - Несколько ящиков: один процесс, свои credentials и SQLite на аккаунт, маршрутизация через `AsyncLocalStorage`.
 
+## Не реализовано
+
+- Чтение содержимого вложений: `mail_get` возвращает только метаданные.
+- `mail_move`, флаги, reply/forward.
+- Graph-бэкенд для Exchange Online.
+- EPA `Require` на FE EWS: NTLM без channel binding не пройдёт.
+
 ## Roadmap
 
 См. [docs/roadmap.md](docs/roadmap.md): шифрование SQLite с поиском по телу, Graph-бэкенд для Exchange Online,
@@ -219,8 +236,8 @@ SQLite (`bun:sqlite`, WAL, FTS5) в `dataDir`; при `accounts` — `<dataDir>/
 
 ## Риски
 
-См. [risks.md](risks.md). M7 (отмена in-flight запроса) закрыт; остальное — средовые риски
-(plaintext SQLite, поддержка библиотеки, EWS retirement в Exchange Online).
+См. [risks.md](risks.md) — полный список (plaintext SQLite, поддержка библиотеки, EWS retirement в Exchange
+Online, глобальный патч axios).
 
 ## Разработка
 

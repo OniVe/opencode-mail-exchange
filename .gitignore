@@ -4,7 +4,6 @@ node_modules/
 lab/.tmp-store/
 lab/.certs/
 mail.db
-mail.db-wal
-mail.db-shm
+mail.db*
 *.sqlite
-*.sqlite3
+*.sqlite*

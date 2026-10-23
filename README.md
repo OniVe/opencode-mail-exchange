@@ -29,10 +29,19 @@ OpenCode V2 plugin for on-prem Exchange: mail, calendar and contacts over EWS + 
   - [Sync](#sync)
 - [Storage](#storage)
 - [Limits](#limits)
+- [Not Implemented](#not-implemented)
 - [Roadmap](#roadmap)
 - [Risks](#risks)
 - [Development](#development)
 - [License](#license)
+
+## Features
+
+- 10 `mail_*` tools: accounts, folders, list, search, get, sync, draft, send, calendar, contacts.
+- Multiple mailboxes in one process with per-account credentials and SQLite.
+- Local SQLite index (WAL, FTS5) in `off` / `metadata` / `full` modes.
+- EWS/NTLM with explicit XML escaping, recipient validation and attachment limits.
+- Request timeout and cancellation via `context.signal`; multi-account routing with `AsyncLocalStorage`.
 
 ## About
 
@@ -40,7 +49,7 @@ Reads and sends mail, lists calendar events and contacts from an on-prem Exchang
 NTLM. Runs inside OpenCode V2 as a native TypeScript plugin: Bun executes `src/index.ts` directly, no build step.
 
 Verified on Exchange 2016 (build 15.1.2507.6), NTLMv2, internal CA. Bun 1.4.2, `@opencode/plugin` 2.0.26,
-76 tests.
+77 tests.
 
 ### Built With
 
@@ -55,8 +64,8 @@ Verified on Exchange 2016 (build 15.1.2507.6), NTLMv2, internal CA. Bun 1.4.2, `
 
 ### Prerequisites
 
-- OpenCode V2 (tested with `opencode v2.0.26`)
-- Bun 1.4+
+- OpenCode V2 with `@opencode/plugin` 2.0.26 (live session verification — R5 — is not done yet)
+- Bun 1.4.2 (tested)
 - Exchange on-prem with EWS enabled and an NTLM domain account
 - `NODE_EXTRA_CA_CERTS` pointing to the root CA PEM when EWS uses an internal CA
 
@@ -106,7 +115,8 @@ export NODE_EXTRA_CA_CERTS='/path/to/root-ca.pem'   # internal CA only
 ```
 
 `MAIL_PASSWORD` is the fallback when no per-account variable is set. `<ID>` is the account id uppercased with
-non-alphanumerics replaced by `_`; auto-generated ids are `account-1`, `account-2`, …
+non-alphanumerics replaced by `_`; a single account gets `default`, multiple accounts without explicit ids get
+`account-1`, `account-2`, …
 
 Without `NODE_EXTRA_CA_CERTS`, Bun does not trust an internal CA; the symptom is an opaque
 `undefined is not an object (evaluating 'response.headers')` from `@ewsjs/xhr`, not `UNABLE_TO_VERIFY_LEAF_SIGNATURE`.
@@ -125,7 +135,7 @@ URL, username and password have no defaults. Examples use `example.com`.
 | `selfAddress` | `MAIL_SELF` | username part (local part, not an address) | mailbox address |
 | `storage` | `MAIL_STORAGE` | `metadata` | `off` / `metadata` / `full`; an unknown value raises `ConfigError` |
 | `dataDir` | `MAIL_DATA_DIR` | `%LOCALAPPDATA%\opencode\mail-exchange\<hash>` / `~/.local/share/...` | root; with `accounts`, `<dataDir>/<id>` unless the account sets `dataDir`; `<hash>` = `sha256(lowercase username)[:16]` |
-| `maxMessages` | `MAIL_MAX_MESSAGES` | 2000 (max 20000) | local index size; integers only |
+| `maxMessages` | `MAIL_MAX_MESSAGES` | 2000 (max 20000) | local index size; fractions truncated, minimum 1 |
 | `retentionDays` | `MAIL_RETENTION_DAYS` | 365 (max 3650) | record TTL |
 | `maxBodyBytes` | `MAIL_MAX_BODY_BYTES` | 100000 (max 1,000,000) | body truncation, UTF-8 bytes |
 | `syncIntervalMinutes` | `MAIL_SYNC_INTERVAL_MINUTES` | 5 (max 1440) | index refresh interval |
@@ -213,6 +223,13 @@ not enforce it. Use BitLocker/EFS if disk encryption is required. Encryption is 
 - Cold start: EWS import ~0.3 s; full plugin load ~0.4 s, RSS ~105 MB; first EWS call adds ~0.45 s (live).
 - Multiple mailboxes: one process, per-account credentials and SQLite, `AsyncLocalStorage` routing.
 
+## Not Implemented
+
+- Reading attachment content: `mail_get` returns metadata only.
+- `mail_move`, flags, reply/forward.
+- Graph backend for Exchange Online.
+- EPA `Require` on FE EWS: NTLM without channel binding will fail.
+
 ## Roadmap
 
 See [docs/roadmap.md](docs/roadmap.md): SQLite encryption with body search, Graph backend for Exchange Online,
@@ -220,8 +237,8 @@ own XHR provider replacing the global axios patch.
 
 ## Risks
 
-See [risks.md](risks.md). M7 (in-flight request cancellation) is closed; remaining items are environmental
-(plaintext SQLite, library maintenance, EWS retirement in Exchange Online).
+See [risks.md](risks.md) for the full list (plaintext SQLite, library maintenance, EWS retirement in Exchange
+Online, global axios patch).
 
 ## Development
 
