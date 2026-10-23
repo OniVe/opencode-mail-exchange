@@ -113,6 +113,12 @@ describe("registerTools", () => {
     const list = registered.find((tool) => tool.name === "list")
     const result = await list?.execute({ limit: 5 })
     expect(result?.content).toContain("Hello")
+
+    // The runtime guard rejects over-long and non-string queries before the backend.
+    const search = registered.find((tool) => tool.name === "search")
+    expect((await search?.execute({ query: "a".repeat(512) }))?.content).toContain("[]")
+    expect((await search?.execute({ query: "a".repeat(513) }))?.content).toContain("query is too long")
+    expect((await search?.execute({ query: 123 }))?.content).toContain("query must be a string")
   })
 
   test("codemode=true switches every tool to Code Mode", async () => {
