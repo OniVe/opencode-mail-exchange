@@ -524,12 +524,13 @@ export function openStore(config: MailConfig): Store | undefined {
 
   const searchByDate = (date: DateTimeParts, take: number, rest?: string): MessageSummary[] => {
     const pattern = `%${date.year}%`
-    // Keep punctuation inside terms (C++, C#, R&D); strip only surrounding quotes.
+    // Keep punctuation inside terms (C++, C#, R&D); strip surrounding quotes and
+    // trailing sentence punctuation.
     const needles = rest
       ? rest
           .toLowerCase()
           .split(/\s+/)
-          .map((token) => token.replace(/^["']+|["']+$/g, ""))
+          .map((token) => token.replace(/^["']+|["']+$/g, "").replace(/[.,;:!?]+$/g, ""))
           .filter(Boolean)
       : []
     const rows = db
@@ -550,8 +551,14 @@ export function openStore(config: MailConfig): Store | undefined {
         const lower = withoutDate.toLowerCase()
         return needles.every((needle) => {
           const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-          const edge = /^\d+$/.test(needle) ? "0-9" : "\\p{L}\\p{N}"
-          return new RegExp(`(^|[^${edge}])${escaped}([^${edge}]|$)`, "iu").test(lower)
+          if (/^\d+$/.test(needle)) {
+            return new RegExp(`(^|[^0-9])${escaped}([^0-9]|$)`).test(lower)
+          }
+          if (/^[\p{L}\p{N}]+$/u.test(needle)) {
+            return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}`, "iu").test(lower)
+          }
+          // Terms with internal punctuation are literal: "C++", "C#", "R&D", "O'Bri".
+          return lower.includes(needle)
         })
       })
       .slice(0, take)

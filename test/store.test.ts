@@ -557,6 +557,7 @@ describe("store", () => {
       message("rT23", "2026-10-23T23:00 report", "2026-10-21T09:00:00Z"),
       message("sp_num", "2026-10-23 5 items", "2026-10-22T09:00:00Z"),
       message("fifteen", "2026-10-23T15:00 items", "2026-10-23T09:00:00Z"),
+      message("obrien", "2026-10-23 O'Brien", "2026-10-24T09:00:00Z"),
     ])
     expect(store.search("2026-10-23 unique", 10).map((item) => item.id)).toEqual(["alice"])
     const all = store.search("2026-10-23", 20).map((item) => item.id)
@@ -570,6 +571,10 @@ describe("store", () => {
     expect(store.search("2026-10-23 C#", 10).map((item) => item.id)).toEqual(["csharp"])
     expect(store.search("2026-10-23 10 report", 10).map((item) => item.id)).toEqual(["rT10"])
     expect(store.search("2026-10-23 5 items", 10).map((item) => item.id)).toEqual(["sp_num"])
+    expect(store.search("2026-10-23 rep", 10).map((item) => item.id)).toContain("quote")
+    expect(store.search("2026-10-23 O'Bri", 10).map((item) => item.id)).toEqual(["obrien"])
+    expect(store.search("2026-10-23 report,", 10).map((item) => item.id)).toContain("quote")
+    expect(store.search("2026-10-23 10:00 report", 10).map((item) => item.id)).toEqual(["rT10"])
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
