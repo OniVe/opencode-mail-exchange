@@ -477,6 +477,9 @@ describe("store", () => {
       message("long-suffix", "units 2026 10 2345 total", "2026-10-24T09:00:00Z"),
       message("txn", "order 2026-10-23TXN-9", "2026-10-25T09:00:00Z"),
       message("text", "note 2026-10-23text", "2026-10-26T09:00:00Z"),
+      message("t30", "invalid 2026-10-23T30:00", "2026-10-27T09:00:00Z"),
+      message("t99", "invalid 2026-10-23T99:00", "2026-10-28T09:00:00Z"),
+      message("t3text", "invalid 2026-10-23T3text", "2026-10-29T09:00:00Z"),
     ])
     expect(store.search("2026-10-23", 10).map((item) => item.id)).toEqual(["iso", "exact"])
     expect(store.search("2026-10-23", 1).map((item) => item.id)).toEqual(["iso"])
