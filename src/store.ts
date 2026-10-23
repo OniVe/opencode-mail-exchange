@@ -530,7 +530,10 @@ export function openStore(config: MailConfig): Store | undefined {
       ? rest
           .toLowerCase()
           .split(/\s+/)
-          .map((token) => token.replace(/^[("'[{]+|[)"'\]}.,;:!?]+$/g, ""))
+          .map((token) => {
+            const trimmed = token.replace(/^[^\p{L}\p{N}]+|[)"'\]}.,;:!?]+$/gu, "")
+            return trimmed || token
+          })
           .filter(Boolean)
       : []
     const rows = db
@@ -563,7 +566,8 @@ export function openStore(config: MailConfig): Store | undefined {
             if (/[\p{L}\p{N}]/u.test(char)) pattern += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
             else pattern += `[^\\p{L}\\p{N}]*${char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^\\p{L}\\p{N}]*`
           }
-          return new RegExp(pattern, "iu").test(lower)
+          const prefix = /^\d/.test(needle) ? "(^|[^0-9])" : /^[\p{L}\p{N}]/u.test(needle) ? "(^|[^\\p{L}\\p{N}])" : ""
+          return new RegExp(`${prefix}${pattern}`, "iu").test(lower)
         })
       })
       .slice(0, take)
