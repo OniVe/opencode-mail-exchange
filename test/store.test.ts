@@ -763,6 +763,9 @@ describe("store", () => {
       message("colonDot", "2026-10-23T10:00:.5", "2026-10-13T09:00:00Z"),
       message("minShortFrac", "2026-10-23T10:0.5", "2026-10-14T09:00:00Z"),
       message("secFrac", "2026-10-23T10:00:0.5", "2026-10-15T09:00:00Z"),
+      message("spaceDbl", "2026-10-23 10:00::0 doc", "2026-10-16T09:00:00Z"),
+      message("spaceColonDot", "2026-10-23 10:00:.5 doc", "2026-10-17T09:00:00Z"),
+      message("spaceShort", "2026-10-23 10:00:0 doc", "2026-10-18T09:00:00Z"),
     ])
     expect(store.search("2026-10-23", 10)).toEqual([])
     for (const query of [
@@ -773,6 +776,9 @@ describe("store", () => {
       "2026-10-23T10:00:0.5",
       "2026-10-23 10:0.5",
       "2026-10-23 24:00::0",
+      "2026-10-23 10:00::0",
+      "2026-10-23 10:00:.5",
+      "2026-10-23 10:00:0",
     ]) {
       expect(store.search(query, 10)).toEqual([])
     }
@@ -788,19 +794,24 @@ describe("store", () => {
       message("plain", "2026-10-23T10:00", "2026-10-10T09:00:00Z"),
       message("dotEnd", "2026-10-23T10:00. meeting notes", "2026-10-11T09:00:00Z"),
       message("colonText", "2026-10-23T10:00: agenda item", "2026-10-12T09:00:00Z"),
+      message("dotNum", "2026-10-23T10:00. 42 items", "2026-10-13T09:00:00Z"),
+      message("colonNum", "2026-10-23T10:00: 10 attendees", "2026-10-14T09:00:00Z"),
+      message("dotYear", "2026-10-23T10:00. 2027 budget", "2026-10-15T09:00:00Z"),
+      message("spaceDotNum", "2026-10-23 10:00. 42 items", "2026-10-16T09:00:00Z"),
     ])
+    const expected = ["colonNum", "colonText", "dotEnd", "dotNum", "dotYear", "plain", "spaceDotNum"]
     expect(
       store
-        .search("2026-10-23", 10)
+        .search("2026-10-23", 20)
         .map((item) => item.id)
         .sort(),
-    ).toEqual(["colonText", "dotEnd", "plain"])
+    ).toEqual(expected)
     expect(
       store
-        .search("2026-10-23T10:00", 10)
+        .search("2026-10-23T10:00", 20)
         .map((item) => item.id)
         .sort(),
-    ).toEqual(["colonText", "dotEnd", "plain"])
+    ).toEqual(expected)
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
@@ -809,8 +820,12 @@ describe("store", () => {
     const config = baseConfig()
     const store = openStore(config)
     if (!store) throw new Error("store expected")
-    store.upsertMessages("wk:inbox", [message("textMin", "2026-10-23 report T10:0 note", "2026-10-10T09:00:00Z")])
+    store.upsertMessages("wk:inbox", [
+      message("textMin", "2026-10-23 report T10:0 note", "2026-10-10T09:00:00Z"),
+      message("badReport", "2026-10-23T10:00:0 badliteral", "2026-10-11T09:00:00Z"),
+    ])
     expect(store.search("2026-10-23 report T10:0", 10).map((item) => item.id)).toEqual(["textMin"])
+    expect(store.search("2026-10-23T10:00:0 badliteral", 10).map((item) => item.id)).toEqual(["badReport"])
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
