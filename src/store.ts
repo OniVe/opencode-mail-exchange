@@ -154,7 +154,7 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string; i
   // A malformed time component ("T10:0", "T10:00:0", "T24:00.500") is not a date-time,
   // but only when it is the whole query: date+text may contain such a literal.
   const malformedTime =
-    /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:[Tt]|\s+)(?:\d{1,2}:\d(?!\d)(?::\d{1,2})?|\d{1,2}:\d{2}:\d(?!\d)|\d{1,2}:\d{2}\.\d+)(?:[Zz]|[+-]\d{2}:?\d{2})?$/.test(
+    /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:[Tt]|\s+)(?:\d{1,2}:\d(?!\d)|\d{1,2}:\d{2}(?:::|:\.|\.[0-9]|:\d(?!\d)))(?:[Zz]|[+-]\d{2}:?\d{2})?/.test(
       query.trim(),
     )
   if (malformedTime) {
@@ -284,10 +284,11 @@ const parseTimeSuffix = (rest: string): ParsedTime | undefined => {
   if (/[A-Za-z0-9]/.test(boundary)) return undefined
   // "T10:00:0" (one-digit seconds) and "T24:00.500" (fraction without seconds) are
   // malformed. Ordinary punctuation after a minute-precision time ("T10:00. next",
-  // "T10:00: agenda") is not: only a following digit makes it malformed.
+  // "T10:00: agenda") is not: skip punctuation and only a following digit invalidates.
   if ((boundary === ":" || boundary === ".") && seconds === undefined) {
-    const next = rest[match[0].length + 1] ?? ""
-    if (/[0-9]/.test(next)) return undefined
+    let index = match[0].length + 1
+    while (index < rest.length && !/[0-9A-Za-z]/.test(rest[index] ?? "")) index++
+    if (index < rest.length && /[0-9]/.test(rest[index] ?? "")) return undefined
   }
   const zoneRaw = match[7]
   const zone = zoneRaw === undefined ? undefined : /^[Zz]$/.test(zoneRaw) ? "Z" : "offset"

@@ -759,10 +759,23 @@ describe("store", () => {
     store.upsertMessages("wk:inbox", [
       message("secbad", "2026-10-23T10:00:0", "2026-10-10T09:00:00Z"),
       message("minfrac", "2026-10-23T24:00.500", "2026-10-11T09:00:00Z"),
+      message("dblColon", "2026-10-23T10:00::0", "2026-10-12T09:00:00Z"),
+      message("colonDot", "2026-10-23T10:00:.5", "2026-10-13T09:00:00Z"),
+      message("minShortFrac", "2026-10-23T10:0.5", "2026-10-14T09:00:00Z"),
+      message("secFrac", "2026-10-23T10:00:0.5", "2026-10-15T09:00:00Z"),
     ])
     expect(store.search("2026-10-23", 10)).toEqual([])
-    expect(store.search("2026-10-23T10:00:0", 10)).toEqual([])
-    expect(store.search("2026-10-23T24:00.500", 10)).toEqual([])
+    for (const query of [
+      "2026-10-23T10:00:0",
+      "2026-10-23T24:00.500",
+      "2026-10-23T10:00::0",
+      "2026-10-23T10:00:.5",
+      "2026-10-23T10:00:0.5",
+      "2026-10-23 10:0.5",
+      "2026-10-23 24:00::0",
+    ]) {
+      expect(store.search(query, 10)).toEqual([])
+    }
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
@@ -893,11 +906,11 @@ describe("store", () => {
     const elapsed = performance.now() - started
     expect(found).toHaveLength(20)
     // Catches order-of-magnitude regressions without depending on CI jitter.
-    expect(elapsed).toBeLessThan(50)
+    expect(elapsed).toBeLessThan(20)
     // A sparse date still has to scan, but must stay in the same ballpark.
     const sparseStarted = performance.now()
     expect(store.search("2026-12-31", 20)).toHaveLength(0)
-    expect(performance.now() - sparseStarted).toBeLessThan(200)
+    expect(performance.now() - sparseStarted).toBeLessThan(100)
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
