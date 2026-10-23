@@ -30,14 +30,13 @@ npm view opencode-mail-exchange dist.tarball
 
 ### Разовая настройка GitHub/npm
 
-1. На npmjs.com: **Package settings → Trusted publishing** для `opencode-mail-exchange`:
+1. GitHub Actions использует стандартный `GITHUB_TOKEN` (`contents: write`) — отдельный PAT не нужен.
+2. На npmjs.com: **Package settings → Trusted publishing** для `opencode-mail-exchange`:
    - owner/repo: `OniVe/opencode-mail-exchange`
    - workflow: `release.yml`
    - environment: пусто (или укажите, если добавите в workflow).
-2. GitHub → Settings → Secrets and variables → Actions: добавить `RELEASE_TOKEN` (PAT с правом
-   `contents: write`), потому что semantic-release пишет `refs/notes/*`.
-3. После первого ручного publish и настройки trusted publisher workflow публикует следующие версии без
-   `NPM_TOKEN`.
+3. После первого ручного publish и настройки trusted publisher workflow публикует следующие версии через OIDC
+   без `NPM_TOKEN`.
 
 ### Версии
 

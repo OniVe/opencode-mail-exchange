@@ -34,6 +34,5 @@ jobs:
       - run: bun test
       - run: npx semantic-release
         env:
-          # A PAT, not GITHUB_TOKEN: semantic-release pushes release metadata to
-          # refs/notes/*, which the Actions app token is not allowed to write.
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          # Default Actions token; contents: write is enough for tag/release.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
