@@ -199,7 +199,7 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string; i
   // Sentence punctuation after a valid time is not a text query: "10:00:30,".
   // Other trailing punctuation is left alone ("... report.").
   const trimmedQuery = query.trim()
-  const sentenceTrimmed = trimmedQuery.replace(/[.,;!?]+$/, "")
+  const sentenceTrimmed = trimmedQuery.replace(/\s*[.,;!?]+$/, "")
   const normalized = /(?:[Tt]|\s)\d{1,2}(?::\d{2}(?::\d{2}(?:\.\d+)?)?|[Hh]\d{2})(?:[Zz]|[+-]\d{2}:?\d{2})?$/.test(
     sentenceTrimmed,
   )
@@ -211,7 +211,7 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string; i
   // but only when it is the whole query: date+text may contain such a literal. Trailing
   // punctuation and a zone/offset are stripped in any order ("10:00:0,Z"), and a
   // one-digit hour with a one-digit minute is a ratio ("1:2"), not a broken time.
-  const malformedProbe = stripTimeSuffixes(normalized)
+  const malformedProbe = stripTimeSuffixes(normalized).trimEnd()
   const malformedTime =
     /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:[Tt]|\s+)(?:\d{2}:\d(?!\d)(?:[.:]\d*)?|\d{1,2}:\d{2}::[0-9.]*|\d{1,2}:\d{2}:\.\d*|\d{1,2}:\d{2}\.\d+|\d{1,2}:\d{2}:\d(?!\d)(?:\.\d+)?)(?:[Zz]|[+-]\d{2}:?\d{2})?$/.test(
       malformedProbe,
