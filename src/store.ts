@@ -533,9 +533,7 @@ export function openStore(config: MailConfig): Store | undefined {
           .map((token) => {
             const leading = token.replace(/^[^\p{L}\p{N}]+/gu, "")
             if (!leading) return token
-            const meaningful = leading.match(/[+#&]+$/)?.[0] ?? ""
-            const base = leading.replace(/[^\p{L}\p{N}]+$/gu, "")
-            return `${base}${meaningful}` || token
+            return leading.replace(/[^\p{L}\p{N}+#&]+$/gu, "") || token
           })
           .filter(Boolean)
       : []
