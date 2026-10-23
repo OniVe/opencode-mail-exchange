@@ -9,7 +9,11 @@
   },
   "files": [
     "src",
-    "README.md"
+    "README.md",
+    "README.ru.md",
+    "risks.md",
+    "docs/roadmap.md",
+    "lab/spike-ews/README.md"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",

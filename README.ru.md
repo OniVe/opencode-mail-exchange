@@ -17,7 +17,7 @@ Bun + TypeScript + Biome, без сборки — OpenCode загружает `s
 {
   "plugins": [
     {
-      "package": "file:///C:/project/ai/opencode-mail-exchange",
+      "package": "file:///C:/path/to/opencode-mail-exchange",
       "options": {
         "storage": "metadata",
         "dataDir": "C:/Users/me/AppData/Local/opencode/mail-exchange",
@@ -41,7 +41,8 @@ Bun + TypeScript + Biome, без сборки — OpenCode загружает `s
 }
 ```
 
-Пароли — только через env, по одному на аккаунт:
+Пароли обычно берутся из env, по одному на аккаунт; inline-опция `password` принимается, но не рекомендуется
+(она попадёт в `opencode.json`):
 
 ```bash
 export MAIL_PASSWORD_PRIMARY='...'
@@ -63,22 +64,24 @@ URL, логин, пароль и адрес ящика **не имеют зна�
 
 | Опция | Env | По умолчанию | Назначение |
 |---|---|---|---|
-| `accounts[]` | — | — | список аккаунтов; без него используется один из верхнеуровневых полей |
-| `id` | — | `default` / `account-N` | id аккаунта для аргумента `account`; `[A-Za-z0-9][A-Za-z0-9._-]*`, служит именем каталога |
+| `accounts[]` | — | — | список аккаунтов; без него верхнеуровневые поля описывают один аккаунт |
+| `id` | — | `default` / `account-N` | id аккаунта для аргумента `account`; `[A-Za-z0-9][A-Za-z0-9._-]*`; используется как имя каталога в схеме `<dataDir>/<id>` |
 | `ewsUrl` | `MAIL_EWS_URL` | — (обязательно) | `https://server/EWS/Exchange.asmx` |
 | `username` | `MAIL_USER` | — (обязательно) | `DOMAIN\user` — NTLM требует домен |
-| `password` | `MAIL_PASSWORD_<ID>` / `MAIL_PASSWORD` | — (обязательно) | пароль |
+| `password` | `MAIL_PASSWORD_<ID>` / `MAIL_PASSWORD` | — (обязательно) | пароль; рекомендуется env, inline `password` принимается |
 | `selfAddress` | `MAIL_SELF` | имя из username | адрес ящика |
 | `storage` | `MAIL_STORAGE` | `metadata` | `off` / `metadata` / `full` |
-| `dataDir` | `MAIL_DATA_DIR` | `%LOCALAPPDATA%\opencode\mail-exchange\<hash>` | корень; при `accounts` каждый аккаунт **всегда** получает `<dataDir>/<id>` (совпадение каталогов — `ConfigError`) |
-| `maxMessages` | `MAIL_MAX_MESSAGES` | 2000 | размер локального индекса |
-| `retentionDays` | `MAIL_RETENTION_DAYS` | 365 | TTL записей |
-| `maxBodyBytes` | `MAIL_MAX_BODY_BYTES` | 100000 | обрезка тела (в байтах UTF-8) |
-| `syncIntervalMinutes` | `MAIL_SYNC_INTERVAL_MINUTES` | 5 | как часто обновлять индекс |
+| `dataDir` | `MAIL_DATA_DIR` | Windows: `%LOCALAPPDATA%\opencode\mail-exchange\<hash>`; иначе `~/.local/share/opencode/mail-exchange/<hash>` | корень; при `accounts` каждый аккаунт получает `<dataDir>/<id>`, если не задал свой `dataDir` (совпадение каталогов — `ConfigError`) |
+| `maxMessages` | `MAIL_MAX_MESSAGES` | 2000 (max 20000) | размер локального индекса |
+| `retentionDays` | `MAIL_RETENTION_DAYS` | 365 (max 3650) | TTL записей |
+| `maxBodyBytes` | `MAIL_MAX_BODY_BYTES` | 100000 (max 1 000 000) | обрезка тела (в байтах UTF-8) |
+| `syncIntervalMinutes` | `MAIL_SYNC_INTERVAL_MINUTES` | 5 (max 1440) | как часто обновлять индекс |
 | `allowSend` | `MAIL_ALLOW_SEND` | `true` | разрешить `mail.send` (`true/false/1/0/yes/no/on/off`, без учёта регистра) |
 | `requestTimeoutMs` | `MAIL_REQUEST_TIMEOUT_MS` | 30000 | таймаут EWS-запроса, мс (≤120000); передаётся в `XhrApi` |
 | `codemode` | `MAIL_CODEMODE` | `false` | `false` — tools видны напрямую; `true` — только через Code Mode `execute` (глобально, не per-account) |
-| `caFile` | `MAIL_CA_FILE` | — | путь к PEM (для проверки и подсказки) |
+| `caFile` | `MAIL_CA_FILE` | — | путь к PEM; проверяется на существование и используется для подсказки про `NODE_EXTRA_CA_CERTS` (само доверие TLS задаётся только этой env) |
+
+Верхнеуровневые опции наследуются записями `accounts[]`; значения аккаунта перекрывают их.
 
 ## Инструменты
 

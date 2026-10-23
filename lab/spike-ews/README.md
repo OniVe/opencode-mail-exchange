@@ -26,4 +26,6 @@ bun run tls.ts              # диагностика TLS/заголовков
 - `ca/` в репозитории отсутствует: корневой CA экспортируется локально в `lab/.certs/` (каталог в `.gitignore`).
 - `mail-ops.ts send` отправляет реальное письмо на `EX_SELF` и удаляет его после проверки.
 - `ews-javascript-api` — CJS; импорт named exports из ESM в Bun работает.
-- Без `NODE_EXTRA_CA_CERTS` Bun падает с `UNABLE_TO_VERIFY_LEAF_SIGNATURE` (внутренний CA не в его bundle).
+- Без `NODE_EXTRA_CA_CERTS` Bun не доверяет внутреннему CA; в этом стеке симптом — непрозрачный
+  `undefined is not an object (evaluating 'response.headers')` из `@ewsjs/xhr` (тот же симптом даёт таймаут),
+  а не `UNABLE_TO_VERIFY_LEAF_SIGNATURE`.

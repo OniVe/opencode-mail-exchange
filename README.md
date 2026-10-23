@@ -41,7 +41,8 @@ Reading folders/messages, message bodies, search, calendar, contacts, drafts wit
 }
 ```
 
-Passwords come from env only, one per account:
+Passwords normally come from env, one per account; an inline `password` option is accepted but not recommended
+(it would end up in `opencode.json`):
 
 ```bash
 export MAIL_PASSWORD_PRIMARY='...'
@@ -64,21 +65,23 @@ The repository contains no real hosts, credentials or addresses; examples use `e
 | Option | Env | Default | Purpose |
 |---|---|---|---|
 | `accounts[]` | — | — | account list; without it, the top-level fields describe one account |
-| `id` | — | `default` / `account-N` | account id used by the `account` argument; `[A-Za-z0-9][A-Za-z0-9._-]*`, also used as a directory name |
+| `id` | — | `default` / `account-N` | account id used by the `account` argument; `[A-Za-z0-9][A-Za-z0-9._-]*`; used as a directory name under the `<dataDir>/<id>` layout |
 | `ewsUrl` | `MAIL_EWS_URL` | — (required) | `https://server/EWS/Exchange.asmx` |
 | `username` | `MAIL_USER` | — (required) | `DOMAIN\user` — NTLM requires the domain |
-| `password` | `MAIL_PASSWORD_<ID>` / `MAIL_PASSWORD` | — (required) | password |
+| `password` | `MAIL_PASSWORD_<ID>` / `MAIL_PASSWORD` | — (required) | password; env is recommended, inline `password` is accepted |
 | `selfAddress` | `MAIL_SELF` | username part | mailbox address |
 | `storage` | `MAIL_STORAGE` | `metadata` | `off` / `metadata` / `full` |
-| `dataDir` | `MAIL_DATA_DIR` | `%LOCALAPPDATA%\opencode\mail-exchange\<hash>` | root; with `accounts`, each account **always** gets `<dataDir>/<id>` (colliding directories raise `ConfigError`) |
-| `maxMessages` | `MAIL_MAX_MESSAGES` | 2000 | local index size |
-| `retentionDays` | `MAIL_RETENTION_DAYS` | 365 | record TTL |
-| `maxBodyBytes` | `MAIL_MAX_BODY_BYTES` | 100000 | body truncation (UTF-8 bytes) |
-| `syncIntervalMinutes` | `MAIL_SYNC_INTERVAL_MINUTES` | 5 | how often the index is refreshed |
+| `dataDir` | `MAIL_DATA_DIR` | Windows: `%LOCALAPPDATA%\opencode\mail-exchange\<hash>`; otherwise `~/.local/share/opencode/mail-exchange/<hash>` | root; with `accounts`, each account gets `<dataDir>/<id>` unless it sets its own `dataDir` (colliding directories raise `ConfigError`) |
+| `maxMessages` | `MAIL_MAX_MESSAGES` | 2000 (max 20000) | local index size |
+| `retentionDays` | `MAIL_RETENTION_DAYS` | 365 (max 3650) | record TTL |
+| `maxBodyBytes` | `MAIL_MAX_BODY_BYTES` | 100000 (max 1,000,000) | body truncation (UTF-8 bytes) |
+| `syncIntervalMinutes` | `MAIL_SYNC_INTERVAL_MINUTES` | 5 (max 1440) | how often the index is refreshed |
 | `allowSend` | `MAIL_ALLOW_SEND` | `true` | allow `mail.send` (`true/false/1/0/yes/no/on/off`, case-insensitive) |
 | `requestTimeoutMs` | `MAIL_REQUEST_TIMEOUT_MS` | 30000 | EWS request timeout, ms (≤120000); passed to `XhrApi` |
 | `codemode` | `MAIL_CODEMODE` | `false` | `false` — tools are listed directly; `true` — only through Code Mode `execute` (global, not per-account) |
-| `caFile` | `MAIL_CA_FILE` | — | path to a PEM (used for validation and hints) |
+| `caFile` | `MAIL_CA_FILE` | — | path to a PEM; checked for existence and used for a `NODE_EXTRA_CA_CERTS` hint (TLS trust itself is configured only via that env var) |
+
+Top-level options are inherited by `accounts[]` entries; per-account values win.
 
 ## Tools
 
