@@ -153,11 +153,17 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string; i
   if (compact) return { date: compact }
   // A malformed time component ("T10:0", "T10:00:0", "T24:00.500") is not a date-time,
   // but only when it is the whole query: date+text may contain such a literal. Trailing
-  // punctuation is ignored ("10:00::0,"), and a one-digit hour with a one-digit minute
-  // is a ratio ("1:2"), not a broken time.
+  // punctuation and a zone/offset are stripped in any order ("10:00:0,Z"), and a
+  // one-digit hour with a one-digit minute is a ratio ("1:2"), not a broken time.
+  let malformedProbe = query.trim()
+  let previousProbe = ""
+  while (malformedProbe !== previousProbe) {
+    previousProbe = malformedProbe
+    malformedProbe = malformedProbe.replace(/[.,;:!?]+$/, "").replace(/(?:[Zz]|[+-]\d{2}:?\d{2})$/, "")
+  }
   const malformedTime =
     /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:[Tt]|\s+)(?:\d{2}:\d(?!\d)(?:[.:]\d*)?|\d{1,2}:\d{2}::[0-9.]*|\d{1,2}:\d{2}:\.\d*|\d{1,2}:\d{2}\.\d+|\d{1,2}:\d{2}:\d(?!\d)(?:\.\d+)?)(?:[Zz]|[+-]\d{2}:?\d{2})?$/.test(
-      query.trim().replace(/[.,;:!?]+$/, ""),
+      malformedProbe,
     )
   if (malformedTime) {
     const base = /^(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})/.exec(query.trim())?.[1]
