@@ -113,8 +113,10 @@ const parseDateTime = (value: string): DateTimeParts | undefined => {
   const hour = match[4]
   if (hour !== undefined && Number(hour) > 23) return undefined
   const minute = match[5]
+  const seconds = match[6]
   const hminute = match[7]
   if (minute !== undefined && Number(minute) > 59) return undefined
+  if (seconds !== undefined && Number(seconds) > 59) return undefined
   if (hminute !== undefined && Number(hminute) > 59) return undefined
   const mode = hour === undefined ? "all" : hminute !== undefined ? "hourH" : match[8] !== undefined ? "hourZ" : "hour"
   const zoneRaw = match[8]
@@ -157,6 +159,13 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string } 
             mode: hminute !== undefined ? "hourH" : "hour",
           },
           text: timeRest[5]?.trim() || undefined,
+        }
+      }
+      const leadingHour = /^(\d{1,2})(?:\s+(.*))?$/.exec(rest ?? "")
+      if (leadingHour && leadingHour[1].length === 2 && Number(leadingHour[1]) <= 23) {
+        return {
+          date: { ...date, hour: leadingHour[1], mode: "hour" },
+          text: leadingHour[2]?.trim() || undefined,
         }
       }
       return { date, text: rest || undefined }
@@ -203,10 +212,13 @@ const parseTimeSuffix = (rest: string): ParsedTime | undefined => {
   if (hour > 23) return undefined
   const minute = match[2] ?? match[4]
   const hminute = match[5]
+  const seconds = match[3]
   if (minute !== undefined && Number(minute) > 59) return undefined
   if (hminute !== undefined && Number(hminute) > 59) return undefined
+  if (seconds !== undefined && Number(seconds) > 59) return undefined
   const boundary = rest[match[0].length] ?? ""
   if (/[A-Za-z0-9]/.test(boundary)) return undefined
+  if ((boundary === ":" || boundary === ".") && minute === undefined) return undefined
   const zoneRaw = match[6]
   const zone = zoneRaw === undefined ? undefined : /^[Zz]$/.test(zoneRaw) ? "Z" : "offset"
   const offset = zone === "offset" ? zoneRaw.replace(":", "") : undefined
