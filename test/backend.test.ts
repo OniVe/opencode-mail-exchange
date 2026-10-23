@@ -174,6 +174,7 @@ describe("search serialization", () => {
     }
 
     expect(await backend.searchMessages({ query: "\u0001\uFFFF", limit: 5 })).toEqual([])
+    expect(await backend.searchMessages({ query: "   ", limit: 5 })).toEqual([])
     expect(findCalls).toBe(0)
 
     backend.close()

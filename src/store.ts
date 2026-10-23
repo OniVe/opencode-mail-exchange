@@ -80,13 +80,18 @@ const stripControlChars = (value: string): string => {
   return clean
 }
 
-const ftsQuery = (query: string): string | undefined => {
+interface FtsGroup {
+  tokens: string[]
+  prefixAll: boolean
+}
+
+const ftsQueries = (query: string): { primary: string; fallback?: string } | undefined => {
   // Split on whitespace, then normalize each fragment. Punctuation inside a word
   // ("R&D", "O'Brien") marks token boundaries, but the tokens must stay adjacent:
   // `"r d"` matches "R&D" and does not match "Report data". A punctuation-only
   // fragment ("R & D") joins its neighbours into the same phrase.
   const fragments = stripControlChars(query).split(/\s+/).filter(Boolean)
-  const groups: Array<{ tokens: string[]; prefixAll: boolean }> = []
+  const groups: FtsGroup[] = []
   let joinNext = false
 
   for (const fragment of fragments) {
@@ -112,15 +117,36 @@ const ftsQuery = (query: string): string | undefined => {
     joinNext = false
   }
 
-  const terms = groups.map((group) => {
-    if (group.tokens.length === 1) return `"${group.tokens[0]}"*`
-    // Exact phrases for ordinary words: a prefix here would make "AT&T" match
-    // "at the" and "I&T" match "I think".
-    if (group.prefixAll) return group.tokens.map((token) => `"${token}"*`).join(" AND ")
-    return `"${group.tokens.join(" ")}"`
-  })
-  if (terms.length === 0) return undefined
-  return terms.join(" AND ")
+  const primary: string[] = []
+  const fallback: string[] = []
+  let needsFallback = false
+  for (const group of groups) {
+    if (group.tokens.length === 1) {
+      const term = `"${group.tokens[0]}"*`
+      primary.push(term)
+      fallback.push(term)
+      continue
+    }
+    if (group.prefixAll) {
+      // Exact date/email first; a partially typed prefix is a second pass, so a
+      // newer message with the same numbers cannot displace the exact match.
+      primary.push(`"${group.tokens.join(" ")}"`)
+      fallback.push(group.tokens.map((token) => `"${token}"*`).join(" AND "))
+      needsFallback = true
+      continue
+    }
+    const last = group.tokens[group.tokens.length - 1]
+    // A prefix on the last token keeps "O'Brien" matching "O'Briens". One-letter
+    // tails ("AT&T", "I&T", "R&D") stay exact to avoid matching "at the"/"I think".
+    const term = last.length >= 2 ? `"${group.tokens.join(" ")}"*` : `"${group.tokens.join(" ")}"`
+    primary.push(term)
+    fallback.push(term)
+  }
+  if (primary.length === 0) return undefined
+  return {
+    primary: primary.join(" AND "),
+    fallback: needsFallback ? fallback.join(" AND ") : undefined,
+  }
 }
 
 const splitAddresses = (value: string | null | undefined): string[] =>
@@ -288,20 +314,21 @@ export function openStore(config: MailConfig): Store | undefined {
       return (rows as MessageRow[]).map(rowToSummary)
     },
     search(query, limit) {
-      const match = ftsQuery(query)
+      const queries = ftsQueries(query)
       const take = Math.max(0, Math.trunc(limit))
-      if (!match || take === 0) return []
+      if (!queries || take === 0) return []
       // Newest first: `searchMessages` merges this page with the EWS page and keeps the
       // newest `limit` rows, so both halves must select by received date, not by rank.
-      const rows = db
-        .query(`
-          select m.* from messages_fts f
-          join messages m on m.id = f.msg_id
-          where messages_fts match ? and m.deleted = 0
-          order by m.received_ts desc, m.id asc
-          limit ?
-        `)
-        .all(match, take)
+      const select = db.query(`
+        select m.* from messages_fts f
+        join messages m on m.id = f.msg_id
+        where messages_fts match ? and m.deleted = 0
+        order by m.received_ts desc, m.id asc
+        limit ?
+      `)
+      // Exact date/email phrase first; only if it finds nothing, retry with prefixes.
+      let rows = select.all(queries.primary, take)
+      if (rows.length === 0 && queries.fallback) rows = select.all(queries.fallback, take)
       return (rows as MessageRow[]).map(rowToSummary)
     },
     getMessage(id) {

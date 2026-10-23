@@ -192,38 +192,13 @@ describe("resolveConfig", () => {
     rmSync(root, { recursive: true, force: true })
   })
 
-  test("keeps extended-length paths distinct and detects aliases", () => {
+  test("rejects extended-length and device dataDir paths", () => {
     if (process.platform !== "win32") return
-    const extended = String.raw`\\?\C:\data\rt-mail`
-    expect(() =>
-      resolveAccounts(
-        {
-          ewsUrl: "https://mail/EWS/Exchange.asmx",
-          password: "p",
-          username: "D\\a",
-          accounts: [
-            { id: "a", dataDir: `${extended}.` },
-            { id: "b", dataDir: extended },
-          ],
-        },
-        {},
-      ),
-    ).not.toThrow()
-    // `\\?\C:\dir` and `C:\dir` are the same directory, so they must collide.
-    expect(() =>
-      resolveAccounts(
-        {
-          ewsUrl: "https://mail/EWS/Exchange.asmx",
-          password: "p",
-          username: "D\\a",
-          accounts: [
-            { id: "a", dataDir: extended },
-            { id: "b", dataDir: String.raw`C:\data\rt-mail` },
-          ],
-        },
-        {},
-      ),
-    ).toThrow(ConfigError)
+    const base = { ewsUrl: "https://mail/EWS/Exchange.asmx", password: "p", username: "D\\a" }
+    for (const dataDir of [String.raw`\\?\C:\data\rt-mail`, String.raw`\\.\C:\data\rt-mail`]) {
+      expect(() => resolveConfig({ ...base, dataDir }, {})).toThrow(ConfigError)
+      expect(() => resolveAccounts({ ...base, accounts: [{ id: "a", dataDir }] }, {})).toThrow(ConfigError)
+    }
   })
 
   test("resolves MAIL_PASSWORD_<ID> for auto-generated account ids", () => {
@@ -370,6 +345,8 @@ describe("store", () => {
       message("quick", "Quick answer", "2026-10-17T09:00:00Z"),
       message("date", "2026-10-23 report", "2026-10-16T09:00:00Z"),
       message("addr", "john.doe@example.com", "2026-10-15T09:00:00Z"),
+      message("obrien", "O'Brien report", "2026-10-12T09:00:00Z"),
+      message("obriens", "O'Briens report", "2026-10-11T09:00:00Z"),
       message("at", "at the table", "2026-10-14T09:00:00Z"),
       message("ithink", "I think so", "2026-10-13T09:00:00Z"),
     ])
@@ -378,8 +355,26 @@ describe("store", () => {
     expect(store.search("Q&A", 10).map((item) => item.id)).toEqual(["qa"])
     expect(store.search("202-10", 10).map((item) => item.id)).toEqual(["date"])
     expect(store.search("j.doe@example.com", 10).map((item) => item.id)).toEqual(["addr"])
+    expect(store.search("O'Bri", 10).map((item) => item.id)).toEqual(["obrien", "obriens"])
+    expect(store.search("O'Brien", 10).map((item) => item.id)).toEqual(["obrien", "obriens"])
     expect(store.search("AT&T", 10)).toEqual([])
     expect(store.search("I&T", 10)).toEqual([])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
+  test("an exact numeric date is not displaced by newer partial-number noise", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      message("date-true", "2026-10-23 report", "2026-10-16T09:00:00Z"),
+      message("noise-num", "2026 plan: 10 hires, 23 desks", "2026-10-24T09:00:00Z"),
+    ])
+    expect(store.search("2026-10-23", 1).map((item) => item.id)).toEqual(["date-true"])
+    expect(store.search("2026-10-23", 3).map((item) => item.id)).toEqual(["date-true"])
+    // A partial date falls back to prefixes and may match both; the exact date must be present.
+    expect(store.search("202-10", 10).map((item) => item.id)).toContain("date-true")
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })

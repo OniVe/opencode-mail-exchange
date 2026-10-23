@@ -189,6 +189,15 @@ export function resolveConfig(options: unknown, env: NodeJS.ProcessEnv = process
   const caFile = asString(opts.caFile) ?? asString(env.MAIL_CA_FILE)
   if (caFile && !existsSync(caFile)) throw new ConfigError(`caFile does not exist: ${caFile}`)
 
+  const dataDir = asString(opts.dataDir) ?? asString(env.MAIL_DATA_DIR) ?? defaultDataDir(username)
+  if (process.platform === "win32" && (EXTENDED_WIN32_PATH.test(dataDir) || DEVICE_WIN32_PATH.test(dataDir))) {
+    // bun:sqlite resolves these namespaces unpredictably (trailing dots are dropped,
+    // `\\.\C:\dir` aliases `C:\dir`), so an account could silently share another index.
+    throw new ConfigError(
+      "dataDir must be a normal path; extended-length (\\\\?\\\\) and device (\\\\.\\\\) paths are not supported",
+    )
+  }
+
   return {
     id,
     ewsUrl,
@@ -197,7 +206,7 @@ export function resolveConfig(options: unknown, env: NodeJS.ProcessEnv = process
     selfAddress,
     caFile,
     storage: asStorageMode(opts.storage ?? env.MAIL_STORAGE) ?? "metadata",
-    dataDir: normalizeWin32Path(asString(opts.dataDir) ?? asString(env.MAIL_DATA_DIR) ?? defaultDataDir(username)),
+    dataDir: normalizeWin32Path(dataDir),
     maxMessages: Math.min(asInt(opts.maxMessages ?? env.MAIL_MAX_MESSAGES, 2000), 20_000),
     retentionDays: Math.min(asInt(opts.retentionDays ?? env.MAIL_RETENTION_DAYS, 365), 3650),
     maxBodyBytes: Math.min(asInt(opts.maxBodyBytes ?? env.MAIL_MAX_BODY_BYTES, 100_000), 1_000_000),

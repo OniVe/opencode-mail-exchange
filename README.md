@@ -156,6 +156,8 @@ URL, username and password have no defaults. Examples use `example.com`.
 | `caFile` | `MAIL_CA_FILE` | — | PEM existence check and `NODE_EXTRA_CA_CERTS` hint; TLS trust is set by that env only |
 
 Top-level options are inherited by `accounts[]`; per-account values win, except `codemode` (global).
+`dataDir` must be a normal path: extended-length (`\\?\`) and device (`\\.\`) namespaces are rejected with
+`ConfigError`.
 
 ## Usage
 
