@@ -897,6 +897,8 @@ describe("store", () => {
     store.upsertMessages("wk:inbox", [
       message("s15", "2026-10-23T10:00:15", "2026-10-10T09:00:00Z"),
       message("s30", "2026-10-23 10:00:30", "2026-10-11T09:00:00Z"),
+      message("z30", "2026-10-23T10:00:30Z", "2026-10-14T09:00:00Z"),
+      message("off30", "2026-10-23T10:00:30+03:00", "2026-10-15T09:00:00Z"),
       message("plain", "2026-10-23T10:00", "2026-10-12T09:00:00Z"),
       // A literal time in prose must not satisfy a time filter (discriminates text fallback).
       message("literal", "2026-10-23 09:00 start, literal 10:00:30 in notes", "2026-10-13T09:00:00Z"),
@@ -904,17 +906,34 @@ describe("store", () => {
     expect(store.search("2026-10-23T10:00:15", 10).map((item) => item.id)).toEqual(["s15"])
     expect(store.search("2026-10-23 10:00:15", 10).map((item) => item.id)).toEqual(["s15"])
     // Sentence punctuation after a valid time is not a text query.
-    expect(store.search("2026-10-23 10:00:30,", 10).map((item) => item.id)).toEqual(["s30"])
-    expect(store.search("2026-10-23 10:00:30.", 10).map((item) => item.id)).toEqual(["s30"])
-    expect(store.search("2026-10-23 10:00:30 ,", 10).map((item) => item.id)).toEqual(["s30"])
+    expect(
+      store
+        .search("2026-10-23 10:00:30,", 10)
+        .map((item) => item.id)
+        .sort(),
+    ).toEqual(["off30", "s30", "z30"])
+    expect(
+      store
+        .search("2026-10-23 10:00:30.", 10)
+        .map((item) => item.id)
+        .sort(),
+    ).toEqual(["off30", "s30", "z30"])
+    expect(
+      store
+        .search("2026-10-23 10:00:30 ,", 10)
+        .map((item) => item.id)
+        .sort(),
+    ).toEqual(["off30", "s30", "z30"])
     expect(store.search("2026-10-23T10:00:15,", 10).map((item) => item.id)).toEqual(["s15"])
     expect(store.search("2026-10-23T10:00:15 ,", 10).map((item) => item.id)).toEqual(["s15"])
+    expect(store.search("2026-10-23T10:00:30Z,", 10).map((item) => item.id)).toEqual(["z30"])
+    expect(store.search("2026-10-23T10:00:30+03:00,", 10).map((item) => item.id)).toEqual(["off30"])
     expect(
       store
         .search("2026-10-23 10:00", 10)
         .map((item) => item.id)
         .sort(),
-    ).toEqual(["plain", "s15", "s30"])
+    ).toEqual(["off30", "plain", "s15", "s30", "z30"])
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
@@ -976,7 +995,7 @@ describe("store", () => {
     // Early exit must not be slower than a full scan; absolute CI speed cancels out.
     expect(denseMs).toBeLessThanOrEqual(sparseMs + 5)
     // Catastrophe cap: a synchronous date scan must never block for long.
-    expect(denseMs).toBeLessThan(100)
+    expect(denseMs).toBeLessThan(30)
     // Normalization must stay linear: 64 KB costs at most a small multiple of 4 KB.
     // On the quadratic revision this ratio is ~250x (6 s vs 25 ms).
     const poison4 = `2026-10-23 x${",Z".repeat(2000)}`
@@ -992,8 +1011,8 @@ describe("store", () => {
     expect(scan64).toBeLessThanOrEqual(scan4 * 8 + 50)
     expect(query64).toBeLessThanOrEqual(query4 * 8 + 50)
     // Catastrophe caps: the quadratic revision took seconds here.
-    expect(scan64).toBeLessThan(500)
-    expect(query64).toBeLessThan(500)
+    expect(scan64).toBeLessThan(150)
+    expect(query64).toBeLessThan(150)
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
