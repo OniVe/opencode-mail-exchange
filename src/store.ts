@@ -106,7 +106,7 @@ const ftsQueries = (query: string): { primary: string; fallback?: string } | und
     }
     // Dates and email addresses are often typed partially: "202-10" and
     // "j.doe@example.com" must still match "2026-10-23" / "john.doe@...".
-    const prefixAll = fragment.includes("@") || tokens.every((token) => /^\d+$/.test(token))
+    const prefixAll = fragment.includes("@") || fragment.includes(".") || tokens.every((token) => /^\d+$/.test(token))
     if (joinNext && groups.length > 0) {
       const last = groups[groups.length - 1]
       last.tokens.push(...tokens)

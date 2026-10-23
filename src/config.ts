@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { existsSync } from "node:fs"
+import { existsSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 import type { StorageMode } from "./types"
@@ -51,15 +51,25 @@ const normalizeWin32Path = (value: string): string => {
   return path.join(root, ...normalized.filter(Boolean))
 }
 
-const pathKey = (value: string): string => {
-  if (process.platform !== "win32") return path.resolve(value)
-  if (DEVICE_WIN32_PATH.test(value)) return value.toLowerCase()
-  if (EXTENDED_WIN32_PATH.test(value)) {
-    // `\\?\C:\dir` is the same file as `C:\dir`, but `\\?\C:\dir.` is not.
-    const rest = /^[\\/]{2}\?[\\/]UNC[\\/]/i.test(value) ? `\\\\${value.slice(8)}` : value.slice(4)
-    return path.resolve(rest.replace(/\//g, "\\")).toLowerCase()
+/** Resolves the existing ancestor so junctions, symlinks and 8.3 names cannot hide a shared index. */
+const physicalPathKey = (value: string): string => {
+  const resolved = path.resolve(normalizeWin32Path(value))
+  const suffix: string[] = []
+  let current = resolved
+  while (!existsSync(current)) {
+    const parent = path.dirname(current)
+    if (parent === current) break
+    suffix.unshift(path.basename(current))
+    current = parent
   }
-  return path.resolve(normalizeWin32Path(value)).toLowerCase()
+  let base = current
+  try {
+    base = realpathSync.native(current)
+  } catch {
+    // Permissions or a racing delete: keep the lexical path; the store will fail loudly.
+  }
+  const physical = path.join(base, ...suffix)
+  return process.platform === "win32" ? physical.toLowerCase() : physical
 }
 
 /** bun:sqlite resolves these namespaces unpredictably; reject them before a store is opened. */
@@ -161,8 +171,9 @@ export function resolveAccounts(options: unknown, env: NodeJS.ProcessEnv = proce
     )
     assertDataDirSupported(dataDir)
 
-    // Windows paths are case-insensitive: `Mail` and `mail` hit the same directory.
-    const dirKey = pathKey(dataDir)
+    // Windows paths are case-insensitive, and junctions/8.3 names are aliases:
+    // compare the physical directory, not just the spelling.
+    const dirKey = physicalPathKey(dataDir)
     const clash = dirs.get(dirKey)
     if (clash) {
       throw new ConfigError(`accounts "${clash}" and "${id}" resolve to the same dataDir: ${dataDir}`)

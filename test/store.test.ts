@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite"
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { ConfigError, resolveAccounts, resolveConfig } from "../src/config"
@@ -212,6 +212,35 @@ describe("resolveConfig", () => {
     for (const override of ["", null, "   ", 0]) {
       expect(() => resolveAccounts({ ...base, accounts: [{ id: "a", dataDir: override }] }, {})).toThrow(ConfigError)
     }
+    const root = mkdtempSync(path.join(tmpdir(), "mail-ext-root-"))
+    expect(() => resolveAccounts({ ...base, accounts: [{ id: "a", dataDir: path.join(root, "normal") }] }, {})).toThrow(
+      ConfigError,
+    )
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  test("rejects a junction that resolves to the same dataDir", () => {
+    if (process.platform !== "win32") return
+    const root = mkdtempSync(path.join(tmpdir(), "mail-junction-"))
+    const real = path.join(root, "real")
+    const link = path.join(root, "link")
+    mkdirSync(real)
+    symlinkSync(real, link, "junction")
+    expect(() =>
+      resolveAccounts(
+        {
+          ewsUrl: "https://mail/EWS/Exchange.asmx",
+          password: "p",
+          username: "D\\a",
+          accounts: [
+            { id: "a", dataDir: real },
+            { id: "b", dataDir: link },
+          ],
+        },
+        {},
+      ),
+    ).toThrow(ConfigError)
+    rmSync(root, { recursive: true, force: true })
   })
 
   test("resolves MAIL_PASSWORD_<ID> for auto-generated account ids", () => {
@@ -368,6 +397,7 @@ describe("store", () => {
     expect(store.search("Q&A", 10).map((item) => item.id)).toEqual(["qa"])
     expect(store.search("202-10", 10).map((item) => item.id)).toEqual(["date"])
     expect(store.search("j.doe@example.com", 10).map((item) => item.id)).toEqual(["addr"])
+    expect(store.search("j.doe", 10).map((item) => item.id)).toEqual(["addr"])
     expect(store.search("O'Bri", 10).map((item) => item.id)).toEqual(["obrien", "obriens"])
     expect(store.search("O'Brien", 10).map((item) => item.id)).toEqual(["obrien", "obriens"])
     expect(store.search("AT&T", 10)).toEqual([])
