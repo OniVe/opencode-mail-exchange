@@ -487,7 +487,7 @@ describe("store", () => {
       message("unpaddedDate", "unpadded 2026-10-3T9:45:00Z", "2026-10-11T09:00:00Z"),
       message("p09", "padded hour 2026-10-23T09:30:00Z", "2026-10-12T09:00:00Z"),
       message("s9", "single hour 2026-10-23T9:45:00Z", "2026-10-13T09:00:00Z"),
-      message("t24", "invalid 2026-10-23T24:00", "2026-10-14T09:00:00Z"),
+      message("t24", "invalid 2026-10-23T24:30", "2026-10-14T09:00:00Z"),
       message("hello", "odd 2026-10-23T3hello", "2026-10-15T09:00:00Z"),
       message("h99", "invalid 2026-10-23T10h99", "2026-10-16T09:00:00Z"),
       message("htext", "invalid 2026-10-23T10h30text", "2026-10-17T09:00:00Z"),
@@ -719,13 +719,14 @@ describe("store", () => {
       message("v123", "2026-10-23 v1.2.3 release", "2026-10-11T09:00:00Z"),
       message("num", "2026-10-23 1.2", "2026-10-12T09:00:00Z"),
       message("v112", "2026-10-23 11.2 value", "2026-10-13T09:00:00Z"),
+      message("v1230", "2026-10-23 v1.2.30 release", "2026-10-14T09:00:00Z"),
     ])
     expect(
       store
         .search("2026-10-23 1.2", 10)
         .map((item) => item.id)
         .sort(),
-    ).toEqual(["num", "v12", "v123"])
+    ).toEqual(["num", "v12", "v123", "v1230"])
     expect(store.search("2026-10-23 1.2.3", 10).map((item) => item.id)).toEqual(["v123"])
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
@@ -744,6 +745,25 @@ describe("store", () => {
     // The whitespace form validates seconds too: parity with the compact form.
     expect(store.search("2026-10-23 10:00:60", 10)).toEqual([])
     expect(store.search("2026-10-23T10:00:60", 10)).toEqual([])
+    // A single-digit minute is malformed in both forms.
+    expect(store.search("2026-10-23T10:0", 10)).toEqual([])
+    expect(store.search("2026-10-23 10:0", 10)).toEqual([])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
+  test("ISO end-of-day 24:00 matches its date", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      message("t24", "2026-10-23T24:00", "2026-10-10T09:00:00Z"),
+      message("t2430", "2026-10-23T24:30", "2026-10-11T09:00:00Z"),
+    ])
+    expect(store.search("2026-10-23", 10).map((item) => item.id)).toEqual(["t24"])
+    expect(store.search("2026-10-23T24:00", 10).map((item) => item.id)).toEqual(["t24"])
+    // 24:30 is not a valid ISO time.
+    expect(store.search("2026-10-23T24:30", 10)).toEqual([])
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
@@ -795,6 +815,28 @@ describe("store", () => {
     expect(ids("2026-10-23 C++11")).toEqual(["cpp11", "cpp11Spaced"])
     expect(ids("2026-10-23 R&D")).toEqual(["rd", "rdSpaced"])
     expect(ids("2026-10-23 e-mail")).toEqual(["email"])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
+  test("date scan stays within a generous budget on a larger index", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    const rows = Array.from({ length: 5000 }, (_, index) => ({
+      ...message(
+        `m${index}`,
+        `2026-10-23 report ${index}`,
+        `2026-10-${String(10 + (index % 18)).padStart(2, "0")}T09:00:00Z`,
+      ),
+    }))
+    store.upsertMessages("wk:inbox", rows)
+    const started = performance.now()
+    const found = store.search("2026-10-23", 20)
+    const elapsed = performance.now() - started
+    expect(found).toHaveLength(20)
+    // Generous bound: catches quadratic regressions, not CI jitter.
+    expect(elapsed).toBeLessThan(2000)
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
