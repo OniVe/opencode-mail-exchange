@@ -175,6 +175,40 @@ describe("registerTools", () => {
     expect(seen).toBe(controller.signal)
   })
 
+  test("maps permissions per tool", async () => {
+    const registered: Array<{ name: string; options?: Record<string, unknown> }> = []
+    const ctx = {
+      tool: {
+        transform: (callback: (editor: unknown) => void) => {
+          callback({
+            namespace: () => {},
+            add: (tool: { name: string; options?: Record<string, unknown> }) => registered.push(tool),
+            update: () => {},
+            remove: () => {},
+          })
+          return Promise.resolve({ dispose: async () => {} })
+        },
+      },
+    } as unknown as Plugin.Context
+
+    await registerTools(ctx, service)
+    const expected: Record<string, string> = {
+      accounts: "mail.read",
+      folders: "mail.read",
+      list: "mail.read",
+      search: "mail.read",
+      get: "mail.read",
+      sync: "mail.read",
+      draft: "mail.draft",
+      send: "mail.send",
+      calendar: "mail.read",
+      contacts: "mail.read",
+    }
+    for (const [name, permission] of Object.entries(expected)) {
+      expect(registered.find((tool) => tool.name === name)?.options?.permission).toBe(permission)
+    }
+  })
+
   test("registers inline attachment fields in the draft/send schema", async () => {
     type TestTool = { name: string; input: { properties?: Record<string, { properties?: Record<string, unknown> }> } }
     const registered: TestTool[] = []

@@ -3,3 +3,8 @@ node_modules/
 *.log
 lab/.tmp-store/
 lab/.certs/
+mail.db
+mail.db-wal
+mail.db-shm
+*.sqlite
+*.sqlite3

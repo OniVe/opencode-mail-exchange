@@ -41,6 +41,8 @@ const asNumber = (value: unknown, fallback: number): number => {
   return Number.isFinite(n) && n > 0 ? n : fallback
 }
 
+const asInt = (value: unknown, fallback: number): number => Math.trunc(asNumber(value, fallback))
+
 const TRUE_VALUES = new Set(["true", "1", "yes", "on"])
 const FALSE_VALUES = new Set(["false", "0", "no", "off"])
 
@@ -67,9 +69,11 @@ const asAllowSend = (value: unknown): boolean => {
   return parsed
 }
 
-const asStorageMode = (value: unknown, fallback: StorageMode): StorageMode => {
+const asStorageMode = (value: unknown): StorageMode | undefined => {
+  if (value === undefined || value === null || value === "") return undefined
   const raw = asString(value)?.toLowerCase()
-  return raw === "off" || raw === "metadata" || raw === "full" ? raw : fallback
+  if (raw === "off" || raw === "metadata" || raw === "full") return raw
+  throw new ConfigError(`storage must be one of: off, metadata, full; got ${JSON.stringify(value)}`)
 }
 
 export const accountKey = (username: string): string =>
@@ -97,13 +101,14 @@ export function resolveAccounts(options: unknown, env: NodeJS.ProcessEnv = proce
   const codemode = asBool(opts.codemode ?? env.MAIL_CODEMODE, false)
 
   return entries.map((entry, index) => {
-    const config = resolveConfig({ ...opts, ...entry, accounts: undefined }, env)
     const id = asString(entry.id) ?? (entries.length === 1 ? "default" : `account-${index + 1}`)
     if (!ACCOUNT_ID_PATTERN.test(id)) {
       throw new ConfigError(
         `invalid account id: "${id}" (allowed: letters, digits, ".", "_", "-"; must start with a letter or digit)`,
       )
     }
+    // Pass the resolved id down so `MAIL_PASSWORD_<ID>` works for auto-generated account-N ids too.
+    const config = resolveConfig({ ...opts, ...entry, id, accounts: undefined }, env)
     if (seen.has(id)) throw new ConfigError(`duplicate account id: ${id}`)
     seen.add(id)
 
@@ -160,14 +165,14 @@ export function resolveConfig(options: unknown, env: NodeJS.ProcessEnv = process
     password,
     selfAddress,
     caFile,
-    storage: asStorageMode(opts.storage ?? env.MAIL_STORAGE, "metadata"),
+    storage: asStorageMode(opts.storage ?? env.MAIL_STORAGE) ?? "metadata",
     dataDir: asString(opts.dataDir) ?? asString(env.MAIL_DATA_DIR) ?? defaultDataDir(username),
-    maxMessages: Math.min(asNumber(opts.maxMessages ?? env.MAIL_MAX_MESSAGES, 2000), 20_000),
-    retentionDays: Math.min(asNumber(opts.retentionDays ?? env.MAIL_RETENTION_DAYS, 365), 3650),
-    maxBodyBytes: Math.min(asNumber(opts.maxBodyBytes ?? env.MAIL_MAX_BODY_BYTES, 100_000), 1_000_000),
-    syncIntervalMinutes: Math.min(asNumber(opts.syncIntervalMinutes ?? env.MAIL_SYNC_INTERVAL_MINUTES, 5), 1440),
+    maxMessages: Math.min(asInt(opts.maxMessages ?? env.MAIL_MAX_MESSAGES, 2000), 20_000),
+    retentionDays: Math.min(asInt(opts.retentionDays ?? env.MAIL_RETENTION_DAYS, 365), 3650),
+    maxBodyBytes: Math.min(asInt(opts.maxBodyBytes ?? env.MAIL_MAX_BODY_BYTES, 100_000), 1_000_000),
+    syncIntervalMinutes: Math.min(asInt(opts.syncIntervalMinutes ?? env.MAIL_SYNC_INTERVAL_MINUTES, 5), 1440),
     allowSend: asAllowSend(opts.allowSend ?? env.MAIL_ALLOW_SEND),
-    requestTimeoutMs: Math.min(asNumber(opts.requestTimeoutMs ?? env.MAIL_REQUEST_TIMEOUT_MS, 30_000), 120_000),
+    requestTimeoutMs: Math.min(asInt(opts.requestTimeoutMs ?? env.MAIL_REQUEST_TIMEOUT_MS, 30_000), 120_000),
     codemode: asBool(opts.codemode ?? env.MAIL_CODEMODE, false),
   }
 }

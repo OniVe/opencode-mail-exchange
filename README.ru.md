@@ -1,16 +1,72 @@
+<div align="center">
+
 # opencode-mail-exchange
+
+Плагин OpenCode V2 для on-prem Exchange: почта, календарь и контакты через EWS + NTLM.
+
+![OpenCode V2](https://img.shields.io/badge/OpenCode-V2-black)
+![Bun](https://img.shields.io/badge/Bun-1.4-black)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)
+![Biome](https://img.shields.io/badge/Biome-2.5-green)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
 [English](README.md) · **Русский**
 
-Плагин OpenCode V2 для почты Exchange (on-prem): EWS + NTLM, почта, календарь, контакты.
-Bun + TypeScript + Biome, без сборки — OpenCode загружает `src/index.ts` напрямую.
+</div>
 
-## Статус
+## Содержание
 
-Проверено на живом сервере: **Exchange 2016** (build 15.1.2507.6), NTLMv2, внутренний CA.
-Чтение папок/писем, тело письма, поиск, календарь, контакты, черновик с вложением, отправка — работают.
+- [О плагине](#о-плагине)
+- [Возможности](#возможности)
+- [Начало работы](#начало-работы)
+  - [Требования](#требования)
+  - [Установка](#установка)
+  - [Конфигурация](#конфигурация)
+- [Использование](#использование)
+  - [Инструменты](#инструменты)
+  - [Получатели](#получатели)
+  - [Ошибки](#ошибки)
+  - [Синхронизация](#синхронизация)
+- [Хранение](#хранение)
+- [Лимиты](#лимиты)
+- [Roadmap](#roadmap)
+- [Риски](#риски)
+- [Разработка](#разработка)
+- [Лицензия](#лицензия)
 
-## Установка
+## О плагине
+
+Читает и отправляет почту, показывает события календаря и контакты on-prem ящика Exchange через EWS с NTLM.
+Работает внутри OpenCode V2 как нативный TypeScript-плагин: Bun исполняет `src/index.ts` напрямую, сборка не нужна.
+
+Проверено на Exchange 2016 (build 15.1.2507.6), NTLMv2, внутренний CA. Bun 1.4.2, `@opencode/plugin` 2.0.26,
+76 тестов.
+
+### Стек
+
+- [OpenCode V2](https://opencode.ai/v2/docs/) (`@opencode/plugin`)
+- [Bun](https://bun.sh/) 1.4
+- TypeScript 5.9 (strict)
+- [Biome](https://biomejs.dev/) 2.5
+- [`ews-javascript-api`](https://github.com/gautamsi/ews-javascript-api) 0.15.3 + `@ewsjs/xhr` 3.1.3
+- SQLite + FTS5 через `bun:sqlite`
+
+## Начало работы
+
+### Требования
+
+- OpenCode V2 (проверено на `opencode v2.0.26`)
+- Bun 1.4+
+- Exchange on-prem с включённым EWS и доменной NTLM-учётной записью
+- `NODE_EXTRA_CA_CERTS` с PEM корневого CA, если EWS за внутренним CA
+
+### Установка
+
+```bash
+git clone https://github.com/OniVe/opencode-mail-exchange.git
+cd opencode-mail-exchange
+bun install
+```
 
 ```jsonc
 // ~/.config/opencode/opencode.jsonc
@@ -41,118 +97,130 @@ Bun + TypeScript + Biome, без сборки — OpenCode загружает `s
 }
 ```
 
-Пароли обычно берутся из env, по одному на аккаунт; inline-опция `password` принимается, но не рекомендуется
-(она попадёт в `opencode.json`):
+Пароли обычно берутся из env, по одному на аккаунт; inline `password` принимается, но не рекомендуется:
 
 ```bash
 export MAIL_PASSWORD_PRIMARY='...'
 export MAIL_PASSWORD_SHARED='...'
-export NODE_EXTRA_CA_CERTS='/path/to/root-ca.pem'   # если EWS за внутренним CA
+export NODE_EXTRA_CA_CERTS='/path/to/root-ca.pem'   # только для внутреннего CA
 ```
 
-`MAIL_PASSWORD` используется как общий fallback, если per-account переменная не задана.
+`MAIL_PASSWORD` — fallback, если per-account переменная не задана. `<ID>` — id аккаунта в верхнем регистре,
+не-алфанумерика заменяется на `_`; автоматические id — `account-1`, `account-2`, …
 
-`NODE_EXTRA_CA_CERTS` обязателен, если сертификат EWS выпущен внутренним CA: Bun не использует
-хранилище сертификатов Windows. Фактический симптом в этом стеке — непрозрачный
-`Exception: undefined is not an object (evaluating 'response.headers')` из `@ewsjs/xhr`
-(тот же симптом даёт и таймаут), а не `UNABLE_TO_VERIFY_LEAF_SIGNATURE`.
+Без `NODE_EXTRA_CA_CERTS` Bun не доверяет внутреннему CA; симптом — непрозрачный
+`undefined is not an object (evaluating 'response.headers')` из `@ewsjs/xhr`, а не `UNABLE_TO_VERIFY_LEAF_SIGNATURE`.
 
-## Конфигурация
+### Конфигурация
 
-URL, логин, пароль и адрес ящика **не имеют значений по умолчанию** — задаются только через `opencode.json` или env.
-В репозитории нет реальных хостов, учёток и адресов; в примерах — `example.com`.
+URL, логин и пароль не имеют значений по умолчанию. В примерах — `example.com`.
 
 | Опция | Env | По умолчанию | Назначение |
 |---|---|---|---|
 | `accounts[]` | — | — | список аккаунтов; без него верхнеуровневые поля описывают один аккаунт |
-| `id` | — | `default` / `account-N` | id аккаунта для аргумента `account`; `[A-Za-z0-9][A-Za-z0-9._-]*`; используется как имя каталога в схеме `<dataDir>/<id>` |
-| `ewsUrl` | `MAIL_EWS_URL` | — (обязательно) | `https://server/EWS/Exchange.asmx` |
-| `username` | `MAIL_USER` | — (обязательно) | `DOMAIN\user` — NTLM требует домен |
-| `password` | `MAIL_PASSWORD_<ID>` / `MAIL_PASSWORD` | — (обязательно) | пароль; рекомендуется env, inline `password` принимается |
-| `selfAddress` | `MAIL_SELF` | имя из username | адрес ящика |
-| `storage` | `MAIL_STORAGE` | `metadata` | `off` / `metadata` / `full` |
-| `dataDir` | `MAIL_DATA_DIR` | Windows: `%LOCALAPPDATA%\opencode\mail-exchange\<hash>`; иначе `~/.local/share/opencode/mail-exchange/<hash>` | корень; при `accounts` каждый аккаунт получает `<dataDir>/<id>`, если не задал свой `dataDir` (совпадение каталогов — `ConfigError`) |
-| `maxMessages` | `MAIL_MAX_MESSAGES` | 2000 (max 20000) | размер локального индекса |
+| `id` | — | `default` / `account-N` | id аккаунта для аргумента `account`; `[A-Za-z0-9][A-Za-z0-9._-]*`; имя каталога в `<dataDir>/<id>` |
+| `ewsUrl` | `MAIL_EWS_URL` | — (обязательно) | `https://server/EWS/Exchange.asmx`; `http://` принимается, но без шифрования |
+| `username` | `MAIL_USER` | — (обязательно) | `DOMAIN\user`; NTLM требует домен |
+| `password` | `MAIL_PASSWORD_<ID>` / `MAIL_PASSWORD` | — (обязательно) | пароль; рекомендуется env |
+| `selfAddress` | `MAIL_SELF` | часть username (локальная часть, не адрес) | адрес ящика |
+| `storage` | `MAIL_STORAGE` | `metadata` | `off` / `metadata` / `full`; неизвестное значение — `ConfigError` |
+| `dataDir` | `MAIL_DATA_DIR` | `%LOCALAPPDATA%\opencode\mail-exchange\<hash>` / `~/.local/share/...` | корень; при `accounts` — `<dataDir>/<id>`, если аккаунт не задал свой `dataDir`; `<hash>` = `sha256(lowercase username)[:16]` |
+| `maxMessages` | `MAIL_MAX_MESSAGES` | 2000 (max 20000) | размер локального индекса; целое |
 | `retentionDays` | `MAIL_RETENTION_DAYS` | 365 (max 3650) | TTL записей |
-| `maxBodyBytes` | `MAIL_MAX_BODY_BYTES` | 100000 (max 1 000 000) | обрезка тела (в байтах UTF-8) |
-| `syncIntervalMinutes` | `MAIL_SYNC_INTERVAL_MINUTES` | 5 (max 1440) | как часто обновлять индекс |
-| `allowSend` | `MAIL_ALLOW_SEND` | `true` | разрешить `mail.send` (`true/false/1/0/yes/no/on/off`, без учёта регистра) |
-| `requestTimeoutMs` | `MAIL_REQUEST_TIMEOUT_MS` | 30000 | таймаут EWS-запроса, мс (≤120000); передаётся в `XhrApi` |
-| `codemode` | `MAIL_CODEMODE` | `false` | `false` — tools видны напрямую; `true` — только через Code Mode `execute` (глобально, не per-account) |
-| `caFile` | `MAIL_CA_FILE` | — | путь к PEM; проверяется на существование и используется для подсказки про `NODE_EXTRA_CA_CERTS` (само доверие TLS задаётся только этой env) |
+| `maxBodyBytes` | `MAIL_MAX_BODY_BYTES` | 100000 (max 1 000 000) | обрезка тела, байты UTF-8 |
+| `syncIntervalMinutes` | `MAIL_SYNC_INTERVAL_MINUTES` | 5 (max 1440) | период обновления индекса |
+| `allowSend` | `MAIL_ALLOW_SEND` | `true` | разрешить `mail.send`; `true/false/1/0/yes/no/on/off`; неизвестное значение — `ConfigError` |
+| `requestTimeoutMs` | `MAIL_REQUEST_TIMEOUT_MS` | 30000 | таймаут EWS, мс (≤120000) |
+| `codemode` | `MAIL_CODEMODE` | `false` | `false` — прямые tools; `true` — только через Code Mode `execute` (глобально) |
+| `caFile` | `MAIL_CA_FILE` | — | проверка наличия PEM и подсказка про `NODE_EXTRA_CA_CERTS`; TLS-доверие задаёт только env |
 
-Верхнеуровневые опции наследуются записями `accounts[]`; значения аккаунта перекрывают их (кроме `codemode` — он глобальный).
+Верхнеуровневые опции наследуются `accounts[]`; значения аккаунта перекрывают их, кроме `codemode` (глобальный).
 
-## Инструменты
+## Использование
 
-| Tool | Что делает |
+### Инструменты
+
+| Tool | Назначение |
 |---|---|
 | `mail_accounts` | список аккаунтов (id, адрес, EWS URL, режим хранения) |
-| `mail_folders` | список папок с unread/total |
-| `mail_list` | письма в папке (метаданные, пагинация; получатели лениво добираются из EWS) |
-| `mail_search` | поиск: локальный FTS, иначе EWS (получатели так же лениво) |
-| `mail_get` | письмо + тело (с лимитом); `fetched` — тело получено этим вызовом (bind или кэш), `bodyCached` — тело лежит в локальном индексе |
-| `mail_sync` | инкрементальный `SyncFolderItems`; возвращает `{synced, complete}` |
-| `mail_draft` | черновик (не отправляет) |
-| `mail_send` | отправка (permission `mail.send`); результат `{sent: true}` — EWS `Send` не возвращает Id |
+| `mail_folders` | папки с unread/total |
+| `mail_list` | письма в папке (метаданные, пагинация) |
+| `mail_search` | локальный FTS, fallback EWS |
+| `mail_get` | письмо + тело; `fetched` / `bodyCached` |
+| `mail_sync` | инкрементальный `SyncFolderItems`; `{synced, complete}` |
+| `mail_draft` | создать черновик |
+| `mail_send` | отправить; `{sent: true}` (EWS `Send` не возвращает id) |
 | `mail_calendar` | события за период |
-| `mail_contacts` | контакты; `query` сканирует до 500 контактов страницами (последняя страница урезается до остатка бюджета; EWS не умеет substring по EmailAddresses), затем фильтр локально |
+| `mail_contacts` | контакты; `query` сканирует до 500 контактов страницами |
 
-Все инструменты регистрируются с `codemode` из опции плагина: по умолчанию `false` — модель вызывает их напрямую, не через Code Mode `execute`. `codemode: true` скрывает прямые вызовы и оставляет только `execute` (полезно, если каталог инструментов разрастается). Опция глобальная: инструменты регистрируются один раз, per-account значение игнорируется.
-Параметр `account` (id из `mail_accounts`) выбирает ящик; по умолчанию — первый аккаунт.
-Права инструментов: `mail.read` для чтения, `mail.draft` для черновиков, `mail.send` для отправки.
+Права: `mail.read` (чтение), `mail.draft` (черновики), `mail.send` (отправка).
+`account` выбирает ящик; по умолчанию первый аккаунт.
+`codemode: false` (default) — tools видны напрямую; `codemode: true` — только через `execute`.
 
-**Получатели в `mail_list`/`mail_search`.** `SyncFolderItems` не приносит `To`/`Cc`, поэтому строки индекса
-могут знать только конверт. Для такой страницы `mail_list`/`mail_search` делают один `BindToItems`
-(`ToRecipients` + `CcRecipients`) и кэшируют результат; `mail_get` тоже обновляет `to`/`cc` в индексе.
-`recipientsKnown: true` — `to`/`cc` достоверны (в том числе когда bind вернул пустой список: «получателей нет» —
-это ответ, а не неизвестность); `recipientsKnown: false` — добрать не удалось (bind упал или не уложился в бюджет),
-`to` пуст, `cc` отсутствует; ошибка bind не ломает выдачу страницы.
+Область поиска: локальный FTS покрывает `inbox`, `sent`, `drafts`, `deleted`; EWS-fallback ищет только `Inbox`.
+Остальные папки не ищутся.
 
-Обогащение получателей не блокирует выдачу: у него свой бюджет `min(2000, max(500, requestTimeoutMs/5))` мс.
-Если bind не уложился — страница возвращается с `recipientsKnown: false`, а обогащение паркуется на 60 с
-(повторные `mail_list` это время не ходят в EWS за получателями).
+Runtime-оговорка: имена tools, видимость `codemode` и permission-гейт определяются `@opencode/plugin` 2.0.26.
+Живая проверка в сессии OpenCode — R5 в [docs/roadmap.md](docs/roadmap.md), пока не выполнена.
 
-**Ошибки инструментов.** Провал инструмента — это успешный `Result` с `content: "ERROR: ..."` и
-`metadata.error: true`: хост видит вызов завершённым (`completed`), а не упавшим, и получает текст ошибки.
-Это осознанная конвенция — `Tool.Error` не используется. Стек-трейсы не отдаются; у SOAP-ошибок сохраняются
-`Message` и `ErrorCode`, транспортные (таймаут/TLS) переводятся в actionable-сообщение.
+### Получатели
 
-**Синхронизация.** `mail_sync` возвращает `{synced, complete}`: `complete: false` — за 50 раундов выбраны не все
-изменения (`MoreChangesAvailable` всё ещё true), повторите вызов. Для неиндексируемых папок (календарь,
-контакты, …) и при `storage: "off"` — `{synced: 0, complete: true, skipped: "not-indexed" | "storage-off"}`
-вместо тихого успеха.
+`SyncFolderItems` не возвращает `To`/`Cc`. Для страницы с неизвестными получателями `mail_list`/`mail_search`
+делает один `BindToItems` (`ToRecipients` + `CcRecipients`) и кэширует результат; `mail_get` тоже обновляет
+`to`/`cc`. `recipientsKnown: true` — значения достоверны (включая «получателей нет»);
+`false` — enrichment не удался или не уложился в бюджет, `to` пуст, `cc` отсутствует.
 
-## Проверенные ограничения
+Enrichment добавляет не более `min(2000, max(500, requestTimeoutMs/5))` мс задержки. При таймауте страница
+возвращается с `recipientsKnown: false`, а enrichment паркуется на 60 секунд.
 
-- **HTML-тело**: `ews-javascript-api` пишет текст в SOAP без XML-экранирования; плагин экранирует subject, body, имена получателей и вложений. Без этого HTML сохраняется пустым **без ошибки**, а `a&b.txt`/`Имя <адрес>` дают отказ EWS («Запрос не прошел проверку на соответствие схеме»).
-- **Inline-картинки**: у вложения есть `contentId` и `isInline` (schema `mail_draft`/`mail_send`); плагин проставляет `FileAttachment.ContentId`/`IsInline`, в HTML тело ссылается `cid:<contentId>`. Проверено на draft/send/receive.
-- **Вложения**: локальные лимиты плагина — **40 МБ decoded на вложение** и **10 вложений на письмо**; проверяются
-  до EWS-запроса и дают `Attachment too large: …` / `Too many attachments: …`. HTTP 413 (лимит запроса IIS/EWS)
-  достижим только если локальная проверка отключена или обойдена (прямой вызов EWS мимо плагина); в плагине он
-  всё равно переводится в «attachment too large». Память ~3.5–4.2× размера файла.
-- **Холодный старт**: ~730 мс (import 285 мс + первый EWS-вызов 445 мс), RSS ~86 МБ.
-- **Несколько ящиков**: один процесс, общий `ConfigurationApi`; маршрутизация credentials — через `AsyncLocalStorage` + `XhrApi` на аккаунт.
+### Ошибки
+
+Провал инструмента — успешный `Result` с `content: "ERROR: ..."` и `metadata.error: true`; хост видит
+`completed`, а не упавший вызов. Стек-трейсы не отдаются. SOAP-ошибки сохраняют `Message`/`ErrorCode`;
+таймаут, TLS и отмена переводятся в actionable-текст.
+
+`mail_send` не идемпотентен: таймаут или отмена после `Send()` оставляют доставку неизвестной; повтор может
+создать дубль. Предпочтителен `mail_draft` + явное подтверждение.
+
+### Синхронизация
+
+`mail_sync` возвращает `{synced, complete}`. `complete: false` — 50 раундов не хватило
+(`MoreChangesAvailable` всё ещё true), вызовите снова. Неиндексируемые папки и `storage: "off"` возвращают
+`{synced: 0, complete: true, skipped: "not-indexed" | "storage-off"}`.
 
 ## Хранение
 
-SQLite (`bun:sqlite`, WAL, FTS5) в `dataDir` (при `accounts` — `<dataDir>/<id>/mail.db`):
+SQLite (`bun:sqlite`, WAL, FTS5) в `dataDir`; при `accounts` — `<dataDir>/<id>/mail.db`.
 
-- `off` — индекс не ведётся, всё через EWS;
-- `metadata` — заголовки, preview, FTS; тела по требованию;
-- `full` — плюс кэш тел (до `maxBodyBytes`).
+- `off` — индекса нет, всё через EWS.
+- `metadata` — заголовки, preview, FTS; тела по требованию.
+- `full` — плюс кэш тел, до `maxBodyBytes`.
 
-БД **не** кладётся в проект: иначе письма попадут в контекст агентов и в git. Содержимое — plaintext;
-используйте BitLocker/EFS, если это требование.
+По умолчанию каталог вне проекта. `dataDir` не ограничивается: если указать путь внутрь репозитория, plaintext-индекс
+окажется там. Держите его вне проекта; `.gitignore` покрывает `mail.db*` и `*.sqlite*`, но не принуждает.
+Для шифрования диска используйте BitLocker/EFS. Шифрование индекса — в плане
+[docs/roadmap.md](docs/roadmap.md) (R1).
 
-## Ограничения
+## Лимиты
 
-- EWS on-prem; для Exchange Online нужен Graph-бэкенд (не реализован).
-- Вложения: отправка — base64 в аргументе; чтение вложений пока не реализовано.
-- `mail_move`, флаги, ответы/пересылка — не реализованы (следующая итерация).
-- EPA на FE EWS: проверено, что режим не `Require`; `None`/`Allow` с клиента не различаются.
+- HTML-тело: subject, body, имена получателей и вложений экранируются; без этого HTML сохраняется пустым
+  без ошибки.
+- Inline-картинки: `contentId` + `isInline`; HTML ссылается на `cid:<contentId>`.
+- Вложения: 40 MiB (41.9 MB) на вложение и 10 на письмо, проверяются до EWS. Это лимиты на вложение/количество,
+  не на суммарный запрос: 413 возможен, если суммарный запрос превышает лимит IIS/EWS. Память ~3.5–4.2× размера.
+- Холодный старт: импорт EWS ~0.3 с; полная загрузка плагина ~0.4 с, RSS ~105 МБ; первый EWS-вызов добавляет
+  ~0.45 с (live).
+- Несколько ящиков: один процесс, свои credentials и SQLite на аккаунт, маршрутизация через `AsyncLocalStorage`.
 
-Принятые риски и границы — `risks.md` (M7 — отмена in-flight запросов — закрыт).
+## Roadmap
+
+См. [docs/roadmap.md](docs/roadmap.md): шифрование SQLite с поиском по телу, Graph-бэкенд для Exchange Online,
+свой XHR-провайдер вместо глобального патча axios.
+
+## Риски
+
+См. [risks.md](risks.md). M7 (отмена in-flight запроса) закрыт; остальное — средовые риски
+(plaintext SQLite, поддержка библиотеки, EWS retirement в Exchange Online).
 
 ## Разработка
 
@@ -163,5 +231,8 @@ bun test
 bun run lint
 ```
 
-Живой smoke (read-only): [lab/smoke.ts](https://github.com/OniVe/opencode-mail-exchange/blob/main/lab/smoke.ts) — см.
-[lab/spike-ews/README.md](https://github.com/OniVe/opencode-mail-exchange/blob/main/lab/spike-ews/README.md) про env и CA.
+Живой smoke (read-only): `lab/smoke.ts`; env и CA: `lab/spike-ews/README.md`.
+
+## Лицензия
+
+MIT. См. [LICENSE](LICENSE).

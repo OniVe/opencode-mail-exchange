@@ -4,6 +4,15 @@
   "description": "OpenCode V2 plugin: Exchange mailbox tools (EWS, NTLM), calendar and contacts",
   "type": "module",
   "license": "MIT",
+  "author": "OniVe",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OniVe/opencode-mail-exchange.git"
+  },
+  "homepage": "https://github.com/OniVe/opencode-mail-exchange#readme",
+  "bugs": {
+    "url": "https://github.com/OniVe/opencode-mail-exchange/issues"
+  },
   "exports": {
     ".": "./src/index.ts"
   },
@@ -12,7 +21,8 @@
     "README.md",
     "README.ru.md",
     "risks.md",
-    "docs/roadmap.md"
+    "docs/roadmap.md",
+    "LICENSE"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",

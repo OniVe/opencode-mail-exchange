@@ -137,6 +137,32 @@ describe("resolveConfig", () => {
     rmSync(root, { recursive: true, force: true })
   })
 
+  test("resolves MAIL_PASSWORD_<ID> for auto-generated account ids", () => {
+    const accounts = resolveAccounts(
+      {
+        ewsUrl: "https://mail/EWS/Exchange.asmx",
+        username: "D\\u",
+        accounts: [{}, {}],
+      },
+      { MAIL_PASSWORD_ACCOUNT_1: "one", MAIL_PASSWORD_ACCOUNT_2: "two" },
+    )
+    expect(accounts.map((account) => account.id)).toEqual(["account-1", "account-2"])
+    expect(accounts.map((account) => account.password)).toEqual(["one", "two"])
+  })
+
+  test("rejects an unknown storage mode instead of silently storing metadata", () => {
+    const base = { ewsUrl: "https://mail/EWS/Exchange.asmx", username: "D\\u", password: "p" }
+    expect(() => resolveConfig({ ...base, storage: "none" }, {})).toThrow(ConfigError)
+    expect(resolveConfig({ ...base, storage: "full" }, {}).storage).toBe("full")
+  })
+
+  test("truncates fractional numeric options", () => {
+    const base = { ewsUrl: "https://mail/EWS/Exchange.asmx", username: "D\\u", password: "p" }
+    const config = resolveConfig({ ...base, maxMessages: 1.9, requestTimeoutMs: 2.7 }, {})
+    expect(config.maxMessages).toBe(1)
+    expect(config.requestTimeoutMs).toBe(2)
+  })
+
   test("parses booleans case-insensitively", () => {
     const base = { ewsUrl: "https://mail/EWS/Exchange.asmx", username: "D\\u", password: "p" }
     const off = resolveConfig({ ...base, allowSend: "FALSE" }, {})

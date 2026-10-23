@@ -1,16 +1,72 @@
+<div align="center">
+
 # opencode-mail-exchange
+
+OpenCode V2 plugin for on-prem Exchange: mail, calendar and contacts over EWS + NTLM.
+
+![OpenCode V2](https://img.shields.io/badge/OpenCode-V2-black)
+![Bun](https://img.shields.io/badge/Bun-1.4-black)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)
+![Biome](https://img.shields.io/badge/Biome-2.5-green)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
 **English** · [Русский](README.ru.md)
 
-OpenCode V2 plugin for on-prem Exchange mail: EWS + NTLM, mail, calendar and contacts.
-Bun + TypeScript + Biome, no build step — OpenCode loads `src/index.ts` directly.
+</div>
 
-## Status
+## Table of Contents
 
-Verified against a live server: **Exchange 2016** (build 15.1.2507.6), NTLMv2, internal CA.
-Reading folders/messages, message bodies, search, calendar, contacts, drafts with attachments, and sending all work.
+- [About](#about)
+- [Features](#features)
+- [Getting Started](#getting-started)
+  - [Prerequisites](#prerequisites)
+  - [Installation](#installation)
+  - [Configuration](#configuration)
+- [Usage](#usage)
+  - [Tools](#tools)
+  - [Recipients](#recipients)
+  - [Errors](#errors)
+  - [Sync](#sync)
+- [Storage](#storage)
+- [Limits](#limits)
+- [Roadmap](#roadmap)
+- [Risks](#risks)
+- [Development](#development)
+- [License](#license)
 
-## Installation
+## About
+
+Reads and sends mail, lists calendar events and contacts from an on-prem Exchange mailbox through EWS with
+NTLM. Runs inside OpenCode V2 as a native TypeScript plugin: Bun executes `src/index.ts` directly, no build step.
+
+Verified on Exchange 2016 (build 15.1.2507.6), NTLMv2, internal CA. Bun 1.4.2, `@opencode/plugin` 2.0.26,
+76 tests.
+
+### Built With
+
+- [OpenCode V2](https://opencode.ai/v2/docs/) (`@opencode/plugin`)
+- [Bun](https://bun.sh/) 1.4
+- TypeScript 5.9 (strict)
+- [Biome](https://biomejs.dev/) 2.5
+- [`ews-javascript-api`](https://github.com/gautamsi/ews-javascript-api) 0.15.3 + `@ewsjs/xhr` 3.1.3
+- SQLite + FTS5 via `bun:sqlite`
+
+## Getting Started
+
+### Prerequisites
+
+- OpenCode V2 (tested with `opencode v2.0.26`)
+- Bun 1.4+
+- Exchange on-prem with EWS enabled and an NTLM domain account
+- `NODE_EXTRA_CA_CERTS` pointing to the root CA PEM when EWS uses an internal CA
+
+### Installation
+
+```bash
+git clone https://github.com/OniVe/opencode-mail-exchange.git
+cd opencode-mail-exchange
+bun install
+```
 
 ```jsonc
 // ~/.config/opencode/opencode.jsonc
@@ -41,125 +97,131 @@ Reading folders/messages, message bodies, search, calendar, contacts, drafts wit
 }
 ```
 
-Passwords normally come from env, one per account; an inline `password` option is accepted but not recommended
-(it would end up in `opencode.json`):
+Passwords normally come from env, one per account; inline `password` is accepted but not recommended:
 
 ```bash
 export MAIL_PASSWORD_PRIMARY='...'
 export MAIL_PASSWORD_SHARED='...'
-export NODE_EXTRA_CA_CERTS='/path/to/root-ca.pem'   # if EWS is behind an internal CA
+export NODE_EXTRA_CA_CERTS='/path/to/root-ca.pem'   # internal CA only
 ```
 
-`MAIL_PASSWORD` is the fallback when no per-account variable is set.
+`MAIL_PASSWORD` is the fallback when no per-account variable is set. `<ID>` is the account id uppercased with
+non-alphanumerics replaced by `_`; auto-generated ids are `account-1`, `account-2`, …
 
-`NODE_EXTRA_CA_CERTS` is required when the EWS certificate is issued by an internal CA: Bun does not use
-the Windows certificate store. In this stack the actual symptom is an opaque
-`Exception: undefined is not an object (evaluating 'response.headers')` from `@ewsjs/xhr`
-(timeouts produce the same symptom), not `UNABLE_TO_VERIFY_LEAF_SIGNATURE`.
+Without `NODE_EXTRA_CA_CERTS`, Bun does not trust an internal CA; the symptom is an opaque
+`undefined is not an object (evaluating 'response.headers')` from `@ewsjs/xhr`, not `UNABLE_TO_VERIFY_LEAF_SIGNATURE`.
 
-## Configuration
+### Configuration
 
-URL, username, password and mailbox address have **no defaults** — they must come from `opencode.json` or env.
-The repository contains no real hosts, credentials or addresses; examples use `example.com`.
+URL, username and password have no defaults. Examples use `example.com`.
 
 | Option | Env | Default | Purpose |
 |---|---|---|---|
-| `accounts[]` | — | — | account list; without it, the top-level fields describe one account |
-| `id` | — | `default` / `account-N` | account id used by the `account` argument; `[A-Za-z0-9][A-Za-z0-9._-]*`; used as a directory name under the `<dataDir>/<id>` layout |
-| `ewsUrl` | `MAIL_EWS_URL` | — (required) | `https://server/EWS/Exchange.asmx` |
-| `username` | `MAIL_USER` | — (required) | `DOMAIN\user` — NTLM requires the domain |
-| `password` | `MAIL_PASSWORD_<ID>` / `MAIL_PASSWORD` | — (required) | password; env is recommended, inline `password` is accepted |
-| `selfAddress` | `MAIL_SELF` | username part | mailbox address |
-| `storage` | `MAIL_STORAGE` | `metadata` | `off` / `metadata` / `full` |
-| `dataDir` | `MAIL_DATA_DIR` | Windows: `%LOCALAPPDATA%\opencode\mail-exchange\<hash>`; otherwise `~/.local/share/opencode/mail-exchange/<hash>` | root; with `accounts`, each account gets `<dataDir>/<id>` unless it sets its own `dataDir` (colliding directories raise `ConfigError`) |
-| `maxMessages` | `MAIL_MAX_MESSAGES` | 2000 (max 20000) | local index size |
+| `accounts[]` | — | — | account list; without it, top-level fields describe one account |
+| `id` | — | `default` / `account-N` | account id for the `account` argument; `[A-Za-z0-9][A-Za-z0-9._-]*`; directory name under `<dataDir>/<id>` |
+| `ewsUrl` | `MAIL_EWS_URL` | — (required) | `https://server/EWS/Exchange.asmx`; `http://` is accepted but unencrypted |
+| `username` | `MAIL_USER` | — (required) | `DOMAIN\user`; NTLM requires the domain |
+| `password` | `MAIL_PASSWORD_<ID>` / `MAIL_PASSWORD` | — (required) | password; env recommended |
+| `selfAddress` | `MAIL_SELF` | username part (local part, not an address) | mailbox address |
+| `storage` | `MAIL_STORAGE` | `metadata` | `off` / `metadata` / `full`; an unknown value raises `ConfigError` |
+| `dataDir` | `MAIL_DATA_DIR` | `%LOCALAPPDATA%\opencode\mail-exchange\<hash>` / `~/.local/share/...` | root; with `accounts`, `<dataDir>/<id>` unless the account sets `dataDir`; `<hash>` = `sha256(lowercase username)[:16]` |
+| `maxMessages` | `MAIL_MAX_MESSAGES` | 2000 (max 20000) | local index size; integers only |
 | `retentionDays` | `MAIL_RETENTION_DAYS` | 365 (max 3650) | record TTL |
-| `maxBodyBytes` | `MAIL_MAX_BODY_BYTES` | 100000 (max 1,000,000) | body truncation (UTF-8 bytes) |
-| `syncIntervalMinutes` | `MAIL_SYNC_INTERVAL_MINUTES` | 5 (max 1440) | how often the index is refreshed |
-| `allowSend` | `MAIL_ALLOW_SEND` | `true` | allow `mail.send` (`true/false/1/0/yes/no/on/off`, case-insensitive) |
-| `requestTimeoutMs` | `MAIL_REQUEST_TIMEOUT_MS` | 30000 | EWS request timeout, ms (≤120000); passed to `XhrApi` |
-| `codemode` | `MAIL_CODEMODE` | `false` | `false` — tools are listed directly; `true` — only through Code Mode `execute` (global, not per-account) |
-| `caFile` | `MAIL_CA_FILE` | — | path to a PEM; checked for existence and used for a `NODE_EXTRA_CA_CERTS` hint (TLS trust itself is configured only via that env var) |
+| `maxBodyBytes` | `MAIL_MAX_BODY_BYTES` | 100000 (max 1,000,000) | body truncation, UTF-8 bytes |
+| `syncIntervalMinutes` | `MAIL_SYNC_INTERVAL_MINUTES` | 5 (max 1440) | index refresh interval |
+| `allowSend` | `MAIL_ALLOW_SEND` | `true` | allow `mail.send`; `true/false/1/0/yes/no/on/off`; unknown value raises `ConfigError` |
+| `requestTimeoutMs` | `MAIL_REQUEST_TIMEOUT_MS` | 30000 | EWS timeout, ms (≤120000) |
+| `codemode` | `MAIL_CODEMODE` | `false` | `false` — direct tools; `true` — only through Code Mode `execute` (global) |
+| `caFile` | `MAIL_CA_FILE` | — | PEM existence check and `NODE_EXTRA_CA_CERTS` hint; TLS trust is set by that env only |
 
-Top-level options are inherited by `accounts[]` entries; per-account values win (except `codemode`, which is global).
+Top-level options are inherited by `accounts[]`; per-account values win, except `codemode` (global).
 
-## Tools
+## Usage
 
-| Tool | What it does |
+### Tools
+
+| Tool | Purpose |
 |---|---|
 | `mail_accounts` | list accounts (id, address, EWS URL, storage mode) |
-| `mail_folders` | list folders with unread/total counts |
-| `mail_list` | messages in a folder (metadata, paging; recipients are enriched lazily from EWS) |
-| `mail_search` | local FTS first, EWS fallback (recipients are enriched lazily too) |
-| `mail_get` | message + body (with a limit); `fetched` — the body was obtained by this call (bind or cache), `bodyCached` — the body is stored in the local index |
-| `mail_sync` | incremental `SyncFolderItems`; returns `{synced, complete}` |
-| `mail_draft` | create a draft (does not send) |
-| `mail_send` | send (permission `mail.send`); result is `{sent: true}` — EWS `Send` does not return an id |
-| `mail_calendar` | events in a time range |
-| `mail_contacts` | contacts; `query` scans up to 500 contacts page by page (the last page is clipped to the remaining budget; EWS cannot do substring matching on `EmailAddresses`), then filters locally |
+| `mail_folders` | folders with unread/total |
+| `mail_list` | messages in a folder (metadata, paging) |
+| `mail_search` | local FTS, EWS fallback |
+| `mail_get` | message + body; `fetched` / `bodyCached` |
+| `mail_sync` | incremental `SyncFolderItems`; `{synced, complete}` |
+| `mail_draft` | create a draft |
+| `mail_send` | send; `{sent: true}` (EWS `Send` returns no id) |
+| `mail_calendar` | events in a range |
+| `mail_contacts` | contacts; `query` scans up to 500 contacts page by page |
 
-All tools use the plugin's `codemode` option: by default `false`, so the model calls them directly rather than
-through Code Mode `execute`. `codemode: true` hides direct calls and leaves only `execute` (useful when the tool
-catalog grows). The option is global: tools are registered once, and a per-account value is ignored.
-The `account` argument (an id from `mail_accounts`) selects the mailbox; the first account is the default.
-Tool permissions: `mail.read` for read tools, `mail.draft` for drafts, `mail.send` for sending.
+Permissions: `mail.read` (read tools), `mail.draft`, `mail.send`.
+`account` selects the mailbox; the first account is the default.
+`codemode: false` (default) lists tools directly; `codemode: true` exposes them only through `execute`.
 
-**Recipients in `mail_list`/`mail_search`.** `SyncFolderItems` does not return `To`/`Cc`, so index rows may only
-know the envelope. For such a page, `mail_list`/`mail_search` performs one `BindToItems`
-(`ToRecipients` + `CcRecipients`) and caches the result; `mail_get` also updates `to`/`cc` in the index.
-`recipientsKnown: true` — `to`/`cc` are reliable (including when bind returned an empty list: "no recipients" is an
-answer, not an unknown); `recipientsKnown: false` — enrichment failed or did not fit the budget, `to` is empty and
-`cc` is omitted; a bind failure does not break the page.
+Search scope: local FTS covers `inbox`, `sent`, `drafts`, `deleted`; the EWS fallback searches `Inbox` only.
+Other folders are not searched.
 
-Enrichment never blocks the response: it has its own budget of `min(2000, max(500, requestTimeoutMs/5))` ms.
-If the bind does not fit, the page is returned with `recipientsKnown: false` and enrichment is parked for 60 s
-(subsequent `mail_list` calls do not hit EWS for recipients during that window).
+Runtime note: tool names, `codemode` visibility and permission enforcement are defined by `@opencode/plugin`
+(2.0.26). Live verification in a running OpenCode session is tracked as R5 in
+[docs/roadmap.md](docs/roadmap.md) and is not done yet.
 
-**Tool errors.** A failed tool is a successful `Result` with `content: "ERROR: ..."` and `metadata.error: true`:
-the host sees the call as `completed` rather than failed and receives the error text. This is a deliberate
-convention — `Tool.Error` is not used. Stack traces are not returned; SOAP errors keep `Message` and `ErrorCode`,
-transport errors (timeout/TLS) are translated into an actionable message.
+### Recipients
 
-**Sync.** `mail_sync` returns `{synced, complete}`: `complete: false` means 50 rounds were not enough to drain
-all changes (`MoreChangesAvailable` is still true) — call it again. For non-indexable folders (calendar, contacts, …)
-and with `storage: "off"` it returns `{synced: 0, complete: true, skipped: "not-indexed" | "storage-off"}`
-instead of a silent success.
+`SyncFolderItems` does not return `To`/`Cc`. For a page with unknown recipients, `mail_list`/`mail_search`
+performs one `BindToItems` (`ToRecipients` + `CcRecipients`) and caches the result; `mail_get` also updates
+`to`/`cc`. `recipientsKnown: true` means the values are reliable (including "no recipients");
+`false` means enrichment failed or missed its budget, `to` is empty and `cc` is omitted.
 
-## Verified limits
+Enrichment adds at most `min(2000, max(500, requestTimeoutMs/5))` ms of latency. On timeout the page is returned
+with `recipientsKnown: false` and enrichment is parked for 60 seconds.
 
-- **HTML body**: `ews-javascript-api` writes text into SOAP without XML escaping; the plugin escapes subject, body,
-  recipient names and attachment names. Without this, HTML is stored empty **without an error**, and
-  `a&b.txt` / `Name <address>` are rejected by EWS ("request failed schema validation").
-- **Inline images**: attachments support `contentId` and `isInline` (schema of `mail_draft`/`mail_send`); the plugin
-  sets `FileAttachment.ContentId`/`IsInline`, and the HTML body references `cid:<contentId>`. Verified on
-  draft/send/receive.
-- **Attachments**: plugin-side limits are **40 MB decoded per attachment** and **10 attachments per message**;
-  they are checked before the EWS request and return `Attachment too large: …` / `Too many attachments: …`.
-  HTTP 413 (the IIS/EWS request limit) is reachable only if the local check is disabled or bypassed (a direct EWS
-  call outside the plugin); the plugin still maps it to "attachment too large". Memory is ~3.5–4.2× the file size.
-- **Cold start**: ~730 ms (285 ms import + 445 ms first EWS call), RSS ~86 MB.
-- **Multiple mailboxes**: one process, a shared `ConfigurationApi`; credentials are routed through
-  `AsyncLocalStorage` + one `XhrApi` per account.
+### Errors
+
+A failed tool is a successful `Result` with `content: "ERROR: ..."` and `metadata.error: true`; the host sees
+`completed`, not a crashed call. Stack traces are not returned. SOAP errors keep `Message`/`ErrorCode`;
+timeout, TLS and cancellation are mapped to actionable text.
+
+`mail_send` is not idempotent: a timeout or cancellation after `Send()` leaves delivery unknown; retrying may
+duplicate the message. Prefer `mail_draft` + explicit confirmation.
+
+### Sync
+
+`mail_sync` returns `{synced, complete}`. `complete: false` means 50 rounds were not enough
+(`MoreChangesAvailable` still true) — call it again. Non-indexable folders and `storage: "off"` return
+`{synced: 0, complete: true, skipped: "not-indexed" | "storage-off"}`.
 
 ## Storage
 
-SQLite (`bun:sqlite`, WAL, FTS5) under `dataDir` (with `accounts`, `<dataDir>/<id>/mail.db`):
+SQLite (`bun:sqlite`, WAL, FTS5) under `dataDir`; with `accounts`, `<dataDir>/<id>/mail.db`.
 
-- `off` — no index, everything goes through EWS;
-- `metadata` — headers, preview, FTS; bodies on demand;
-- `full` — plus a body cache (up to `maxBodyBytes`).
+- `off` — no index, everything via EWS.
+- `metadata` — headers, preview, FTS; bodies on demand.
+- `full` — plus body cache, up to `maxBodyBytes`.
 
-The database is **not** stored in the project: otherwise messages would leak into agent context and git.
-Contents are plaintext; use BitLocker/EFS if that is a requirement.
+The default location is outside the project. `dataDir` is not restricted: if you point it into a repository,
+the index (plaintext) will land there. Keep it outside; `.gitignore` covers `mail.db*` and `*.sqlite*`, but does
+not enforce it. Use BitLocker/EFS if disk encryption is required. Encryption is planned in
+[docs/roadmap.md](docs/roadmap.md) (R1).
 
-## Limitations
+## Limits
 
-- EWS on-prem; Exchange Online needs a Graph backend (not implemented).
-- Attachments: sending uses base64 in the argument; reading attachments is not implemented yet.
-- `mail_move`, flags, reply/forward are not implemented (next iteration).
-- EPA on FE EWS: verified that the mode is not `Require`; `None`/`Allow` cannot be distinguished from the client.
+- HTML body: subject, body, recipient names and attachment names are XML-escaped; without this, HTML is stored
+  empty without an error.
+- Inline images: `contentId` + `isInline`; HTML references `cid:<contentId>`.
+- Attachments: 40 MiB (41.9 MB) per attachment and 10 per message, checked before EWS. These checks are
+  per-attachment/count, not a total request cap: a 413 can still occur when the combined request exceeds the
+  IIS/EWS limit. Memory ~3.5–4.2× the file size.
+- Cold start: EWS import ~0.3 s; full plugin load ~0.4 s, RSS ~105 MB; first EWS call adds ~0.45 s (live).
+- Multiple mailboxes: one process, per-account credentials and SQLite, `AsyncLocalStorage` routing.
 
-Accepted risks and boundaries — `risks.md` (M7 — in-flight request cancellation — is closed).
+## Roadmap
+
+See [docs/roadmap.md](docs/roadmap.md): SQLite encryption with body search, Graph backend for Exchange Online,
+own XHR provider replacing the global axios patch.
+
+## Risks
+
+See [risks.md](risks.md). M7 (in-flight request cancellation) is closed; remaining items are environmental
+(plaintext SQLite, library maintenance, EWS retirement in Exchange Online).
 
 ## Development
 
@@ -170,5 +232,8 @@ bun test
 bun run lint
 ```
 
-Live smoke (read-only): [lab/smoke.ts](https://github.com/OniVe/opencode-mail-exchange/blob/main/lab/smoke.ts) — see
-[lab/spike-ews/README.md](https://github.com/OniVe/opencode-mail-exchange/blob/main/lab/spike-ews/README.md) for env and CA setup.
+Live smoke (read-only): `lab/smoke.ts`; env and CA setup: `lab/spike-ews/README.md`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
