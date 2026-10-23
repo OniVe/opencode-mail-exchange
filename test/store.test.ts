@@ -476,6 +476,34 @@ describe("store", () => {
     rmSync(config.dataDir, { recursive: true, force: true })
   })
 
+  test("date search normalizes padding and validates time suffixes", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      message("padDate", "padded 2026-10-03T10:00:00Z", "2026-10-10T09:00:00Z"),
+      message("unpaddedDate", "unpadded 2026-10-3T9:45:00Z", "2026-10-11T09:00:00Z"),
+      message("p09", "padded hour 2026-10-23T09:30:00Z", "2026-10-12T09:00:00Z"),
+      message("s9", "single hour 2026-10-23T9:45:00Z", "2026-10-13T09:00:00Z"),
+      message("t24", "invalid 2026-10-23T24:00", "2026-10-14T09:00:00Z"),
+      message("hello", "odd 2026-10-23T3hello", "2026-10-15T09:00:00Z"),
+      message("h99", "invalid 2026-10-23T10h99", "2026-10-16T09:00:00Z"),
+      message("htext", "invalid 2026-10-23T10h30text", "2026-10-17T09:00:00Z"),
+      message("n7", "units 2026 10 2345", "2026-10-18T09:00:00Z"),
+      message("h10", "time 2026-10-23T10h30", "2026-10-19T09:00:00Z"),
+      message("z10", "call 2026-10-23T10Z", "2026-10-20T09:00:00Z"),
+    ])
+    expect(store.search("2026-10-3", 10).map((item) => item.id)).toEqual(["unpaddedDate", "padDate"])
+    expect(store.search("2026-10-03", 10).map((item) => item.id)).toEqual(["unpaddedDate", "padDate"])
+    expect(store.search("2026-10-23T9", 10).map((item) => item.id)).toEqual(["s9", "p09"])
+    expect(store.search("2026-10-23T09", 10).map((item) => item.id)).toEqual(["s9", "p09"])
+    expect(store.search("2026 10 23", 20).map((item) => item.id)).toEqual(["z10", "h10", "s9", "p09"])
+    expect(store.search("2026-10-23T10Z", 10).map((item) => item.id)).toEqual(["z10"])
+    expect(store.search("2026-10-23T10h30", 10).map((item) => item.id)).toEqual(["h10"])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
   test("a single-digit ISO hour still matches the date", () => {
     const config = baseConfig()
     const store = openStore(config)
