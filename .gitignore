@@ -1,0 +1,5 @@
+node_modules/
+.env
+*.log
+lab/.tmp-store/
+lab/.certs/

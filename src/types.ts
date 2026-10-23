@@ -1,0 +1,100 @@
+export type StorageMode = "off" | "metadata" | "full"
+
+export interface FolderDto {
+  id: string
+  name: string
+  unread: number
+  total: number
+}
+
+export interface MessageSummary {
+  id: string
+  subject: string
+  from: string
+  to: string[]
+  /** CC recipients, present in `mail_get` and when the local index knows them. */
+  cc?: string[]
+  /**
+   * `true` when `to`/`cc` are the real recipient lists — including a bind that returned an
+   * empty list ("no recipients" is an answer). `false` when the local index only holds the
+   * envelope: `mail_list`/`mail_search` then try to fill them from EWS lazily.
+   */
+  recipientsKnown?: boolean
+  received: string
+  isRead: boolean
+  hasAttachments: boolean
+  preview: string
+  conversationId?: string
+  folderId?: string
+}
+
+export interface MessageDetail extends MessageSummary {
+  body: string
+  bodyType: "html" | "text"
+  truncated: boolean
+  cc: string[]
+  /**
+   * `true` when this call produced the body (a fresh EWS bind or a cache hit). An empty body
+   * that was really fetched is still `fetched: true`; `false`/absent means "no body available".
+   */
+  fetched?: boolean
+  /** `true` when the body is stored in the local index (`bodies` row exists) after this call. */
+  bodyCached: boolean
+}
+
+export interface SyncResult {
+  synced: number
+  /** `false` when the round budget ran out while EWS still reported more changes. */
+  complete: boolean
+  /** Set when the folder is not indexed at all, instead of a silent `{synced: 0}`. */
+  skipped?: "not-indexed" | "storage-off"
+}
+
+export interface OutgoingAttachment {
+  name: string
+  contentBase64: string
+  /** Content-ID referenced as `cid:<contentId>` from an HTML body. */
+  contentId?: string
+  /** Inline attachments are hidden from the attachment list and referenced by `cid:`. */
+  isInline?: boolean
+}
+
+export interface OutgoingMessage {
+  to: string[]
+  cc?: string[]
+  subject: string
+  body: string
+  bodyType?: "html" | "text"
+  attachments?: OutgoingAttachment[]
+}
+
+export interface CalendarEvent {
+  id: string
+  subject: string
+  start: string
+  end: string
+  location: string
+  isAllDay: boolean
+  organizer: string
+}
+
+export interface ContactDto {
+  id: string
+  displayName: string
+  email: string
+  company: string
+}
+
+export interface MailBackend {
+  listFolders(): Promise<FolderDto[]>
+  syncFolder(folder: string): Promise<SyncResult>
+  listMessages(input: { folder?: string; limit: number; offset?: number }): Promise<MessageSummary[]>
+  searchMessages(input: { query: string; limit: number }): Promise<MessageSummary[]>
+  getMessage(input: { id: string }): Promise<MessageDetail>
+  /** EWS `Send` returns no item id: the result only confirms the server accepted the message. */
+  send(input: OutgoingMessage): Promise<{ sent: true }>
+  saveDraft(input: OutgoingMessage): Promise<{ id: string }>
+  listCalendar(input: { from?: string; to?: string; limit: number }): Promise<CalendarEvent[]>
+  listContacts(input: { query?: string; limit: number }): Promise<ContactDto[]>
+  close(): void
+}
