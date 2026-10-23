@@ -81,19 +81,44 @@ const stripControlChars = (value: string): string => {
 }
 
 const ftsQuery = (query: string): string | undefined => {
-  // Split on whitespace first: punctuation inside a word ("R&D", "O'Brien") marks
-  // token boundaries, but the tokens must stay adjacent. `"r d"*` matches "R&D"
-  // (only the last token is a prefix) and does not match "Report data".
-  const terms = stripControlChars(query)
-    .split(/\s+/)
-    .map((fragment) =>
-      fragment
-        .replace(/[^\p{L}\p{N}]+/gu, " ")
-        .trim()
-        .replace(/\s+/g, " "),
-    )
-    .filter(Boolean)
-    .map((fragment) => `"${fragment}"*`)
+  // Split on whitespace, then normalize each fragment. Punctuation inside a word
+  // ("R&D", "O'Brien") marks token boundaries, but the tokens must stay adjacent:
+  // `"r d"` matches "R&D" and does not match "Report data". A punctuation-only
+  // fragment ("R & D") joins its neighbours into the same phrase.
+  const fragments = stripControlChars(query).split(/\s+/).filter(Boolean)
+  const groups: Array<{ tokens: string[]; prefixAll: boolean }> = []
+  let joinNext = false
+
+  for (const fragment of fragments) {
+    const tokens = fragment
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+    if (tokens.length === 0) {
+      if (groups.length > 0) joinNext = true
+      continue
+    }
+    // Dates and email addresses are often typed partially: "202-10" and
+    // "j.doe@example.com" must still match "2026-10-23" / "john.doe@...".
+    const prefixAll = fragment.includes("@") || tokens.every((token) => /^\d+$/.test(token))
+    if (joinNext && groups.length > 0) {
+      const last = groups[groups.length - 1]
+      last.tokens.push(...tokens)
+      last.prefixAll = last.prefixAll || prefixAll
+    } else {
+      groups.push({ tokens, prefixAll })
+    }
+    joinNext = false
+  }
+
+  const terms = groups.map((group) => {
+    if (group.tokens.length === 1) return `"${group.tokens[0]}"*`
+    // Exact phrases for ordinary words: a prefix here would make "AT&T" match
+    // "at the" and "I&T" match "I think".
+    if (group.prefixAll) return group.tokens.map((token) => `"${token}"*`).join(" AND ")
+    return `"${group.tokens.join(" ")}"`
+  })
   if (terms.length === 0) return undefined
   return terms.join(" AND ")
 }

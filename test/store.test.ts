@@ -192,6 +192,40 @@ describe("resolveConfig", () => {
     rmSync(root, { recursive: true, force: true })
   })
 
+  test("keeps extended-length paths distinct and detects aliases", () => {
+    if (process.platform !== "win32") return
+    const extended = String.raw`\\?\C:\data\rt-mail`
+    expect(() =>
+      resolveAccounts(
+        {
+          ewsUrl: "https://mail/EWS/Exchange.asmx",
+          password: "p",
+          username: "D\\a",
+          accounts: [
+            { id: "a", dataDir: `${extended}.` },
+            { id: "b", dataDir: extended },
+          ],
+        },
+        {},
+      ),
+    ).not.toThrow()
+    // `\\?\C:\dir` and `C:\dir` are the same directory, so they must collide.
+    expect(() =>
+      resolveAccounts(
+        {
+          ewsUrl: "https://mail/EWS/Exchange.asmx",
+          password: "p",
+          username: "D\\a",
+          accounts: [
+            { id: "a", dataDir: extended },
+            { id: "b", dataDir: String.raw`C:\data\rt-mail` },
+          ],
+        },
+        {},
+      ),
+    ).toThrow(ConfigError)
+  })
+
   test("resolves MAIL_PASSWORD_<ID> for auto-generated account ids", () => {
     const accounts = resolveAccounts(
       {
@@ -322,20 +356,30 @@ describe("store", () => {
     rmSync(config.dataDir, { recursive: true, force: true })
   })
 
-  test("keeps punctuation-separated words adjacent (R&D is not r AND d)", () => {
+  test("keeps punctuation-separated words adjacent, even with spaces or partial dates", () => {
     const config = baseConfig()
     const store = openStore(config)
     if (!store) throw new Error("store expected")
     store.upsertMessages("wk:inbox", [
-      message("true", "R&D roadmap review", "2026-10-23T09:00:00Z"),
-      message("noise-1", "Re: Draft agenda", "2026-10-23T08:00:00Z"),
-      message("noise-2", "Report data", "2026-10-23T07:00:00Z"),
-      message("noise-3", "Risk decision", "2026-10-23T06:00:00Z"),
-      message("qa", "Q&A session", "2026-10-23T05:00:00Z"),
-      message("quick", "Quick answer", "2026-10-23T04:00:00Z"),
+      message("rd", "R&D roadmap review", "2026-10-23T09:00:00Z"),
+      message("spaced", "R & D roadmap", "2026-10-22T09:00:00Z"),
+      message("noise-1", "Re: Draft agenda", "2026-10-21T09:00:00Z"),
+      message("noise-2", "Report data", "2026-10-20T09:00:00Z"),
+      message("noise-3", "Risk decision", "2026-10-19T09:00:00Z"),
+      message("qa", "Q&A session", "2026-10-18T09:00:00Z"),
+      message("quick", "Quick answer", "2026-10-17T09:00:00Z"),
+      message("date", "2026-10-23 report", "2026-10-16T09:00:00Z"),
+      message("addr", "john.doe@example.com", "2026-10-15T09:00:00Z"),
+      message("at", "at the table", "2026-10-14T09:00:00Z"),
+      message("ithink", "I think so", "2026-10-13T09:00:00Z"),
     ])
-    expect(store.search("R&D", 10).map((item) => item.id)).toEqual(["true"])
+    expect(store.search("R&D", 10).map((item) => item.id)).toEqual(["rd", "spaced"])
+    expect(store.search("R & D", 10).map((item) => item.id)).toEqual(["rd", "spaced"])
     expect(store.search("Q&A", 10).map((item) => item.id)).toEqual(["qa"])
+    expect(store.search("202-10", 10).map((item) => item.id)).toEqual(["date"])
+    expect(store.search("j.doe@example.com", 10).map((item) => item.id)).toEqual(["addr"])
+    expect(store.search("AT&T", 10)).toEqual([])
+    expect(store.search("I&T", 10)).toEqual([])
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })

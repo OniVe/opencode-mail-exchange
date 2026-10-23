@@ -42,6 +42,9 @@ describe("SOAP escaping and recipient validation", () => {
     expect(escapeXml("<script>")).toBe("&lt;script&gt;")
     expect(escapeXml('say "hi"')).toBe("say &quot;hi&quot;")
     expect(escapeXml("a\u0000b\u0007c")).toBe("abc")
+    expect(escapeXml("bad\uFFFFchar")).toBe("badchar")
+    expect(escapeXml("\uFFFE")).toBe("")
+    expect(escapeXml("\uD800")).toBe("")
   })
 
   test("parses plain and named recipients", () => {
@@ -153,6 +156,25 @@ describe("search serialization", () => {
     expect(values).toEqual(["R&amp;D", "R&amp;D"])
     // No bare ampersand may reach the SOAP document: it would break the request.
     for (const value of values) expect(value).not.toMatch(/&(?!(?:amp|lt|gt|quot|apos);)/)
+
+    backend.close()
+    rmSync(cfg.dataDir, { recursive: true, force: true })
+  })
+
+  test("does not call EWS when the query is empty after XML sanitization", async () => {
+    const cfg = config()
+    const backend = new EwsBackend(cfg, openStore(cfg))
+    let findCalls = 0
+    ;(backend as unknown as { service: unknown }).service = {
+      FindItems: async () => {
+        findCalls++
+        return { Items: [] }
+      },
+      LoadPropertiesForItems: async () => {},
+    }
+
+    expect(await backend.searchMessages({ query: "\u0001\uFFFF", limit: 5 })).toEqual([])
+    expect(findCalls).toBe(0)
 
     backend.close()
     rmSync(cfg.dataDir, { recursive: true, force: true })

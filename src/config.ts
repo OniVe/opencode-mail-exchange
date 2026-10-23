@@ -28,9 +28,13 @@ export class ConfigError extends Error {}
 /** Account ids become directory names, so they may not contain separators or `..`. */
 const ACCOUNT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
+/** Extended-length (`\\?\`) and device (`\\.\`) paths keep trailing dots; do not normalize them. */
+const EXTENDED_WIN32_PATH = /^[\\/]{2}\?[\\/]/
+const DEVICE_WIN32_PATH = /^[\\/]{2}\.[\\/]/
+
 /** Windows drops trailing dots/spaces from path components; mirror that before path comparisons. */
 const normalizeWin32Path = (value: string): string => {
-  if (process.platform !== "win32") return value
+  if (process.platform !== "win32" || EXTENDED_WIN32_PATH.test(value) || DEVICE_WIN32_PATH.test(value)) return value
   const resolved = path.resolve(value)
   const root = path.parse(resolved).root
   const parts = resolved
@@ -48,8 +52,14 @@ const normalizeWin32Path = (value: string): string => {
 }
 
 const pathKey = (value: string): string => {
-  const resolved = path.resolve(normalizeWin32Path(value))
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved
+  if (process.platform !== "win32") return path.resolve(value)
+  if (DEVICE_WIN32_PATH.test(value)) return value.toLowerCase()
+  if (EXTENDED_WIN32_PATH.test(value)) {
+    // `\\?\C:\dir` is the same file as `C:\dir`, but `\\?\C:\dir.` is not.
+    const rest = /^[\\/]{2}\?[\\/]UNC[\\/]/i.test(value) ? `\\\\${value.slice(8)}` : value.slice(4)
+    return path.resolve(rest.replace(/\//g, "\\")).toLowerCase()
+  }
+  return path.resolve(normalizeWin32Path(value)).toLowerCase()
 }
 
 const asString = (value: unknown): string | undefined =>

@@ -143,10 +143,18 @@ const safe = <T>(read: () => T, fallback: T): T => {
 /** XML 1.0 forbids most C0 controls; keeping them in a SOAP text node breaks the request. */
 const XML_ALLOWED_CONTROLS = new Set([0x09, 0x0a, 0x0d])
 
+/** XML 1.0 also forbids non-characters and unpaired surrogates. */
+const isXmlNonChar = (code: number): boolean =>
+  (code & 0xffff) === 0xfffe ||
+  (code & 0xffff) === 0xffff ||
+  (code >= 0xfdd0 && code <= 0xfdef) ||
+  (code >= 0xd800 && code <= 0xdfff)
+
 const stripControlChars = (value: string): string => {
   let clean = ""
   for (const char of value) {
     const code = char.codePointAt(0) ?? 0
+    if (isXmlNonChar(code)) continue
     if (code >= 0x20 && code !== 0x7f) clean += char
     else if (XML_ALLOWED_CONTROLS.has(code)) clean += char
   }
@@ -321,6 +329,9 @@ export class EwsBackend implements MailBackend {
 
     // The filter value lands in a SOAP text node: `R&D` breaks the request unless escaped.
     const query = escapeXml(input.query)
+    // A query made only of controls/non-characters cannot be sent: the SOAP element
+    // would have no value. There is nothing to search for, so do not call EWS.
+    if (query === "") return this.withRecipients(local)
     let remote: MessageSummary[] = []
     try {
       const filter = new SearchFilter.SearchFilterCollection(LogicalOperator.Or, [

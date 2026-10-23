@@ -85,7 +85,7 @@ describe("searchMessages", () => {
     if (!store) throw new Error("store expected")
     store.upsertMessages("wk:inbox", [
       message("a", "2026-10-20T10:00:00Z", {
-        subject: "local subject",
+        subject: "invoice local subject",
         from: "local@example.com",
         conversationId: "conv-local",
         to: [],
@@ -107,6 +107,8 @@ describe("searchMessages", () => {
     expect(found[0]?.isRead).toBe(true)
     expect(found[0]?.conversationId).toBe("conv-remote")
     expect(found[0]?.to).toEqual(["to@example.com"])
+    // The local half also matched "invoice"; its body-derived preview survives the merge.
+    expect(found[0]?.preview).toBe("local preview")
 
     backend.close()
     rmSync(cfg.dataDir, { recursive: true, force: true })
