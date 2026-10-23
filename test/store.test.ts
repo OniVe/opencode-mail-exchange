@@ -654,6 +654,67 @@ describe("store", () => {
     rmSync(config.dataDir, { recursive: true, force: true })
   })
 
+  test("ambiguous count after a date also matches prose", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      message("prose", "2026-10-23 total 5 items", "2026-10-10T09:00:00Z"),
+      message("time5", "2026-10-23 5 items", "2026-10-11T09:00:00Z"),
+      message("t15", "2026-10-23T15:00 items", "2026-10-12T09:00:00Z"),
+    ])
+    expect(
+      store
+        .search("2026-10-23 5 items", 10)
+        .map((item) => item.id)
+        .sort(),
+    ).toEqual(["prose", "time5"])
+    expect(store.search("2026-10-23 15 items", 10).map((item) => item.id)).toEqual(["t15"])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
+  test("space-form times accept zone and fractional seconds", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      message("z", "2026-10-23T10:30Z", "2026-10-10T09:00:00Z"),
+      message("off", "2026-10-23T10:30+02:00", "2026-10-11T09:00:00Z"),
+      message("ms", "2026-10-23T10:30:15.000Z", "2026-10-12T09:00:00Z"),
+    ])
+    expect(
+      store
+        .search("2026-10-23 10:30Z", 10)
+        .map((item) => item.id)
+        .sort(),
+    ).toEqual(["ms", "z"])
+    expect(store.search("2026-10-23 10:30+02:00", 10).map((item) => item.id)).toEqual(["off"])
+    expect(store.search("2026-10-23 10:30:15.000Z", 10).map((item) => item.id)).toEqual(["ms"])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
+  test("numeric-first terms match inside version tokens", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      message("v12", "2026-10-23 v1.2 release", "2026-10-10T09:00:00Z"),
+      message("v123", "2026-10-23 v1.2.3 release", "2026-10-11T09:00:00Z"),
+      message("num", "2026-10-23 1.2", "2026-10-12T09:00:00Z"),
+    ])
+    expect(
+      store
+        .search("2026-10-23 1.2", 10)
+        .map((item) => item.id)
+        .sort(),
+    ).toEqual(["num", "v12", "v123"])
+    expect(store.search("2026-10-23 1.2.3", 10).map((item) => item.id)).toEqual(["v123"])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
   test("invalid minute/second forms are rejected", () => {
     const config = baseConfig()
     const store = openStore(config)

@@ -97,6 +97,8 @@ interface DateTimeParts {
   zone?: "Z" | "offset"
   offset?: string
   mode: "all" | "hour" | "hourZ" | "hourH"
+  /** A single-digit hour is ambiguous with a count ("5 items"), so text matches too. */
+  ambiguousHour?: boolean
 }
 
 const HOURS = [
@@ -138,21 +140,27 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string } 
     const date = parseDateTime(compactPrefix[1])
     if (date) {
       const rest = compactPrefix[2]?.trim()
-      const timeRest = rest ? /^(\d{1,2})(?::(\d{2})(?::(\d{2}))?|[Hh](\d{2}))?(?:\s+(.*))?$/.exec(rest) : undefined
+      const timeRest = rest
+        ? /^(\d{1,2})(?::(\d{2})(?::(\d{2})(?:\.\d+)?)?|[Hh](\d{2}))?([Zz]|[+-]\d{2}:?\d{2})?(?:\s+(.*))?$/.exec(rest)
+        : undefined
       if (
         timeRest &&
         (timeRest[2] !== undefined ||
           timeRest[3] !== undefined ||
           timeRest[4] !== undefined ||
+          timeRest[5] !== undefined ||
           /^\d{1,2}$/.test(rest ?? ""))
       ) {
         const hour = timeRest[1]
         const minute = timeRest[2]
         const seconds = timeRest[3]
         const hminute = timeRest[4]
+        const zoneRaw = timeRest[5]
         if (Number(hour) > 23 || (minute !== undefined && Number(minute) > 59)) return undefined
         if (seconds !== undefined && Number(seconds) > 59) return undefined
         if (hminute !== undefined && Number(hminute) > 59) return undefined
+        const zone = zoneRaw === undefined ? undefined : /^[Zz]$/.test(zoneRaw) ? "Z" : "offset"
+        const offset = zone === "offset" ? zoneRaw?.replace(":", "") : undefined
         return {
           date: {
             ...date,
@@ -160,9 +168,11 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string } 
             minute,
             second: seconds,
             hminute,
-            mode: hminute !== undefined ? "hourH" : "hour",
+            zone,
+            offset,
+            mode: hminute !== undefined ? "hourH" : zone !== undefined ? "hourZ" : "hour",
           },
-          text: timeRest[5]?.trim() || undefined,
+          text: timeRest[6]?.trim() || undefined,
         }
       }
       // A single or double-digit hour followed by text is still a time filter:
@@ -170,7 +180,13 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string } 
       const leadingHour = /^(\d{1,2})(?:\s+(.*))?$/.exec(rest ?? "")
       if (leadingHour && Number(leadingHour[1]) <= 23) {
         return {
-          date: { ...date, hour: leadingHour[1], mode: "hour" },
+          date: {
+            ...date,
+            hour: leadingHour[1],
+            mode: "hour",
+            // "5 items" may be a count, not a time: text matches stay valid too.
+            ambiguousHour: leadingHour[1].length === 1,
+          },
           text: leadingHour[2]?.trim() || undefined,
         }
       }
@@ -452,6 +468,8 @@ const splitMixedNeedle = (needle: string): MixedPart[] => {
  * the next token. "C++" therefore cannot match "C# +" or "C + D".
  */
 const matchesMixedNeedle = (text: string, needle: string): boolean => {
+  // A numeric-first term also matches inside a token ("1.2" in "v1.2").
+  if (/^\d/.test(needle) && text.includes(needle)) return true
   const parts = splitMixedNeedle(needle)
   if (parts.length === 0) return text.includes(needle)
   const chunks = text.split(/([^\p{L}\p{N}]+)/u)
@@ -667,6 +685,9 @@ export function openStore(config: MailConfig): Store | undefined {
           })
           .filter(Boolean)
       : []
+    // An ambiguous single-digit hour ("5 items") keeps its digit as a text term too,
+    // so both the hour reading and the literal phrase can match.
+    const effectiveNeedles = date.ambiguousHour && date.hour !== undefined ? [date.hour, ...needles] : needles
     const rows = db
       .query(`
         select m.*, b.body from messages m
@@ -675,26 +696,43 @@ export function openStore(config: MailConfig): Store | undefined {
         order by m.received_ts desc, m.id asc
       `)
       .all(pattern, pattern, pattern, pattern) as Array<MessageRow & { body: string | null }>
+    const matchesNeedles = (lower: string): boolean =>
+      effectiveNeedles.every((needle) => {
+        if (needle.length > 256) return lower.includes(needle)
+        const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+        if (/^\d+$/.test(needle)) {
+          return new RegExp(`(^|[^0-9])${escaped}([^0-9]|$)`).test(lower)
+        }
+        if (/^[\p{L}\p{N}]+$/u.test(needle)) {
+          return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}`, "iu").test(lower)
+        }
+        // Mixed terms are compared as token sequences: linear, no regex backtracking.
+        return matchesMixedNeedle(lower, needle)
+      })
     return rows
       .filter((row) => {
         const text = [row.subject, row.from_addr, row.preview, row.body ?? ""].join("\n")
-        if (!matchesDateText(text, date)) return false
+        const dateMatches = matchesDateText(text, date)
         // Ignore the date itself when matching text terms: "2026-10-23 10 report"
         // must not satisfy "10" from the month.
         const withoutDate = text.replace(new RegExp(DATE_TEXT.source, "gu"), " ")
-        const lower = withoutDate.toLowerCase()
-        return needles.every((needle) => {
-          if (needle.length > 256) return lower.includes(needle)
-          const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-          if (/^\d+$/.test(needle)) {
-            return new RegExp(`(^|[^0-9])${escaped}([^0-9]|$)`).test(lower)
+        const textMatches = matchesNeedles(withoutDate.toLowerCase())
+        if (date.ambiguousHour && effectiveNeedles.length > 0) {
+          // "2026-10-23 5 items" may mean hour 5 or the phrase "5 items": accept
+          // either reading, as long as the date itself is present.
+          const dateOnly: DateTimeParts = {
+            ...date,
+            hour: undefined,
+            minute: undefined,
+            second: undefined,
+            hminute: undefined,
+            zone: undefined,
+            offset: undefined,
+            mode: "all",
           }
-          if (/^[\p{L}\p{N}]+$/u.test(needle)) {
-            return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}`, "iu").test(lower)
-          }
-          // Mixed terms are compared as token sequences: linear, no regex backtracking.
-          return matchesMixedNeedle(lower, needle)
-        })
+          return matchesDateText(text, dateOnly) && (dateMatches || textMatches)
+        }
+        return dateMatches && textMatches
       })
       .slice(0, take)
       .map(rowToSummary)
