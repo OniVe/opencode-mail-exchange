@@ -152,10 +152,12 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string; i
   const compact = parseDateTime(query.trim())
   if (compact) return { date: compact }
   // A malformed time component ("T10:0", "T10:00:0", "T24:00.500") is not a date-time,
-  // but only when it is the whole query: date+text may contain such a literal.
+  // but only when it is the whole query: date+text may contain such a literal. Trailing
+  // punctuation is ignored ("10:00::0,"), and a one-digit hour with a one-digit minute
+  // is a ratio ("1:2"), not a broken time.
   const malformedTime =
-    /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:[Tt]|\s+)(?:\d{1,2}:\d(?!\d)(?:[.:]\d*)?|\d{1,2}:\d{2}::[0-9.]*|\d{1,2}:\d{2}:\.\d*|\d{1,2}:\d{2}\.\d+|\d{1,2}:\d{2}:\d(?!\d)(?:\.\d+)?)(?:[Zz]|[+-]\d{2}:?\d{2})?$/.test(
-      query.trim(),
+    /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:[Tt]|\s+)(?:\d{2}:\d(?!\d)(?:[.:]\d*)?|\d{1,2}:\d{2}::[0-9.]*|\d{1,2}:\d{2}:\.\d*|\d{1,2}:\d{2}\.\d+|\d{1,2}:\d{2}:\d(?!\d)(?:\.\d+)?)(?:[Zz]|[+-]\d{2}:?\d{2})?$/.test(
+      query.trim().replace(/[.,;:!?]+$/, ""),
     )
   if (malformedTime) {
     const base = /^(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})/.exec(query.trim())?.[1]
@@ -326,9 +328,14 @@ const matchesDateText = (text: string, query: DateTimeParts): boolean => {
       // A clock-shaped numeric token must still parse: "10:00::0" is not 10:00.
       // "1:2" is a ratio (one-digit hour and minute), and "10:00am"/"1.2" are left alone.
       if (/^\s/.test(rest)) {
-        const token = (rest.trimStart().split(/\s/, 1)[0] ?? "")
-          .replace(/[.,;:!?]+$/, "")
-          .replace(/(?:[Zz]|[+-]\d{2}:?\d{2})$/, "")
+        let token = rest.trimStart().split(/\s/, 1)[0] ?? ""
+        // Strip trailing punctuation and zone/offset in any order: "10:00:0,Z",
+        // "10:00:0+03:00Z" both reduce to the malformed core "10:00:0".
+        let previous = ""
+        while (token !== previous) {
+          previous = token
+          token = token.replace(/[.,;:!?]+$/, "").replace(/(?:[Zz]|[+-]\d{2}:?\d{2})$/, "")
+        }
         const clockLike = /^\d{2}:\d/.test(token) || /^\d{1,2}:\d{2}/.test(token)
         if (clockLike && /^[0-9:.]+$/.test(token) && !parseTimeSuffix(` ${token}`)) {
           match = DATE_TEXT.exec(text)

@@ -197,6 +197,7 @@ describe("search serialization", () => {
     expect(await backend.searchMessages({ query: "   ", limit: 5 })).toEqual([])
     expect(await backend.searchMessages({ query: "2026-10-23T10:00:60", limit: 5 })).toEqual([])
     expect(await backend.searchMessages({ query: "2026-10-23 10:00:60", limit: 5 })).toEqual([])
+    expect(await backend.searchMessages({ query: "2026-10-23 10:00::0,", limit: 5 })).toEqual([])
     expect(findCalls).toBe(0)
 
     backend.close()

@@ -780,6 +780,8 @@ describe("store", () => {
       "2026-10-23 10:00::0",
       "2026-10-23 10:00:.5",
       "2026-10-23 10:00:0",
+      "2026-10-23 10:00::0,",
+      "2026-10-23T10:00::0,",
       "2026-10-23 10:0",
     ]) {
       expect(store.search(query, 10)).toEqual([])
@@ -810,6 +812,8 @@ describe("store", () => {
       message("malComma", "2026-10-23 10:00::0, broken", "2026-10-24T09:00:00Z"),
       message("malZone", "2026-10-23 10:00:0Z agenda", "2026-10-25T09:00:00Z"),
       message("malOffset", "2026-10-23 10:00:0+03:00 agenda", "2026-10-26T09:00:00Z"),
+      message("malCommaZone", "2026-10-23 10:00:0,Z broken", "2026-10-27T09:00:00Z"),
+      message("malZoneOffset", "2026-10-23 10:00:0+03:00Z broken", "2026-10-28T09:00:00Z"),
     ])
     const expected = [
       "ampm",
@@ -838,6 +842,8 @@ describe("store", () => {
         .map((item) => item.id)
         .sort(),
     ).toEqual(expected.filter((id) => !["nl", "tab", "twoSpaces", "ampm", "utc", "ratio"].includes(id)))
+    // A ratio is not a time, so a date+ratio query finds the prose.
+    expect(store.search("2026-10-23 1:2", 30).map((item) => item.id)).toEqual(["ratio"])
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
