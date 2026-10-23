@@ -43,7 +43,8 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "lint": "biome check .",
-    "lint:fix": "biome check --write ."
+    "lint:fix": "biome check --write .",
+    "prepublishOnly": "bun run typecheck && bun run lint && bun test"
   },
   "peerDependencies": {
     "@opencode/plugin": "^2.0.26"

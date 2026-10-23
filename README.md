@@ -5,6 +5,7 @@
 OpenCode V2 plugin for on-prem Exchange: mail, calendar and contacts over EWS + NTLM.
 
 ![OpenCode V2](https://img.shields.io/badge/OpenCode-V2-black)
+![npm](https://img.shields.io/npm/v/opencode-mail-exchange)
 ![Bun](https://img.shields.io/badge/Bun-1.4-black)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)
 ![Biome](https://img.shields.io/badge/Biome-2.5-green)
@@ -71,18 +72,28 @@ Verified on Exchange 2016 (build 15.1.2507.6), NTLMv2, internal CA. Bun 1.4.2, `
 
 ### Installation
 
+From npm (recommended):
+
+```bash
+opencode plugin add opencode-mail-exchange
+```
+
+Then configure it in `opencode.jsonc` (the full example below). From source:
+
 ```bash
 git clone https://github.com/OniVe/opencode-mail-exchange.git
 cd opencode-mail-exchange
 bun install
 ```
 
+and use `"package": "file:///C:/path/to/opencode-mail-exchange"` instead of the npm name.
+
 ```jsonc
 // ~/.config/opencode/opencode.jsonc
 {
   "plugins": [
     {
-      "package": "file:///C:/path/to/opencode-mail-exchange",
+      "package": "opencode-mail-exchange",
       "options": {
         "storage": "metadata",
         "dataDir": "C:/Users/me/AppData/Local/opencode/mail-exchange",

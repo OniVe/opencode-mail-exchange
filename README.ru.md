@@ -5,6 +5,7 @@
 Плагин OpenCode V2 для on-prem Exchange: почта, календарь и контакты через EWS + NTLM.
 
 ![OpenCode V2](https://img.shields.io/badge/OpenCode-V2-black)
+![npm](https://img.shields.io/npm/v/opencode-mail-exchange)
 ![Bun](https://img.shields.io/badge/Bun-1.4-black)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)
 ![Biome](https://img.shields.io/badge/Biome-2.5-green)
@@ -71,18 +72,28 @@
 
 ### Установка
 
+Из npm (рекомендуется):
+
+```bash
+opencode plugin add opencode-mail-exchange
+```
+
+Затем настройте плагин в `opencode.jsonc` (полный пример ниже). Из исходников:
+
 ```bash
 git clone https://github.com/OniVe/opencode-mail-exchange.git
 cd opencode-mail-exchange
 bun install
 ```
 
+и укажите `"package": "file:///C:/path/to/opencode-mail-exchange"` вместо npm-имени.
+
 ```jsonc
 // ~/.config/opencode/opencode.jsonc
 {
   "plugins": [
     {
-      "package": "file:///C:/path/to/opencode-mail-exchange",
+      "package": "opencode-mail-exchange",
       "options": {
         "storage": "metadata",
         "dataDir": "C:/Users/me/AppData/Local/opencode/mail-exchange",
