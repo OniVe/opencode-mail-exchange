@@ -256,16 +256,19 @@ export function openStore(config: MailConfig): Store | undefined {
     },
     search(query, limit) {
       const match = ftsQuery(query)
-      if (!match) return []
+      const take = Math.max(0, Math.trunc(limit))
+      if (!match || take === 0) return []
+      // Newest first: `searchMessages` merges this page with the EWS page and keeps the
+      // newest `limit` rows, so both halves must select by received date, not by rank.
       const rows = db
         .query(`
           select m.* from messages_fts f
           join messages m on m.id = f.msg_id
           where messages_fts match ? and m.deleted = 0
-          order by bm25(messages_fts) asc
+          order by m.received_ts desc, m.id asc
           limit ?
         `)
-        .all(match, limit)
+        .all(match, take)
       return (rows as MessageRow[]).map(rowToSummary)
     },
     getMessage(id) {

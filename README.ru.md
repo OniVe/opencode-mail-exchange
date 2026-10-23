@@ -179,8 +179,9 @@ URL, логин и пароль не имеют значений по умолч
 `codemode: false` (default) — tools видны напрямую; `codemode: true` — только через `execute`.
 
 Область поиска: каждый поиск объединяет локальный FTS (`inbox`, `sent`, `drafts`, `deleted`) с EWS-поиском
-по subject/body в `Inbox`, дедупликация по id. Остальные папки EWS-половиной не покрываются. Один EWS-запрос
-(~0.5 с) на поиск.
+по subject/body в `Inbox`, дедупликация по id; возвращаются самые новые `limit` совпадений. Остальные папки
+EWS-половиной не покрываются. Один EWS-вызов `FindItems` (~0.5 с), плюс `BindToItems`, если в выдаче есть
+письма с неизвестными получателями.
 
 Runtime-оговорка: имена tools, видимость `codemode` и permission-гейт определяются `@opencode/plugin` 2.0.26.
 Живая проверка в сессии OpenCode — R5 в [docs/roadmap.md](docs/roadmap.md), пока не выполнена.

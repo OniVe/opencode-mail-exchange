@@ -19,6 +19,7 @@ import {
   PropertySet,
   SearchFilter,
   ServiceResult,
+  SortDirection,
   SyncFolderItemsScope,
   WellKnownFolderName,
 } from "ews-javascript-api"
@@ -112,6 +113,13 @@ export function mergeSearchResults(
     }
     byId.set(message.id, {
       ...existing,
+      // EWS is the live source: prefer it for mutable metadata, keep richer local extras.
+      subject: message.subject || existing.subject,
+      from: message.from || existing.from,
+      received: message.received || existing.received,
+      isRead: message.isRead,
+      conversationId: message.conversationId ?? existing.conversationId,
+      folderId: existing.folderId ?? message.folderId,
       to: existing.to.length > 0 ? existing.to : message.to,
       cc: existing.cc && existing.cc.length > 0 ? existing.cc : message.cc,
       recipientsKnown: existing.recipientsKnown === true || message.recipientsKnown === true,
@@ -121,7 +129,7 @@ export function mergeSearchResults(
   }
   return [...byId.values()]
     .sort((a, b) => (Date.parse(b.received) || 0) - (Date.parse(a.received) || 0) || a.id.localeCompare(b.id))
-    .slice(0, limit)
+    .slice(0, Math.max(0, Math.trunc(limit)))
 }
 
 const safe = <T>(read: () => T, fallback: T): T => {
@@ -319,7 +327,10 @@ export class EwsBackend implements MailBackend {
         new SearchFilter.ContainsSubstring(ItemSchema.Subject, query),
         new SearchFilter.ContainsSubstring(ItemSchema.Body, query),
       ])
-      const page = await this.service.FindItems(WellKnownFolderName.Inbox, filter, new ItemView(input.limit))
+      const view = new ItemView(input.limit)
+      // Both halves select the newest matches; merge then keeps the global newest `limit`.
+      view.OrderBy.Add(ItemSchema.DateTimeReceived, SortDirection.Descending)
+      const page = await this.service.FindItems(WellKnownFolderName.Inbox, filter, view)
       if (page.Items.length > 0) {
         await this.service.LoadPropertiesForItems(page.Items, MESSAGE_PROPERTY_SET)
         remote = page.Items.map((item) => toSummary(item, undefined, true))

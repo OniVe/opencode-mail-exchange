@@ -15,24 +15,46 @@ const message = (id: string, received: string, overrides: Partial<MessageSummary
 })
 
 describe("mergeSearchResults", () => {
-  test("dedupes by id and keeps the richest fields", () => {
-    const local = [message("a", "2026-10-23T10:00:00Z", { to: [], cc: [], recipientsKnown: false, preview: "local" })]
+  test("dedupes by id: live EWS metadata wins, local extras are kept", () => {
+    const local = [
+      message("a", "2026-10-20T10:00:00Z", {
+        subject: "local subject",
+        from: "local@example.com",
+        isRead: false,
+        conversationId: "conv-local",
+        to: [],
+        cc: [],
+        recipientsKnown: false,
+        preview: "local preview",
+      }),
+    ]
     const remote = [
-      message("a", "2026-10-23T10:00:00Z", {
+      message("a", "2026-10-25T10:00:00Z", {
+        subject: "remote subject",
+        from: "remote@example.com",
+        isRead: true,
+        conversationId: "conv-remote",
         to: ["to@example.com"],
         cc: ["cc@example.com"],
         recipientsKnown: true,
         hasAttachments: true,
+        preview: "remote preview",
       }),
       message("b", "2026-10-22T10:00:00Z"),
     ]
     const merged = mergeSearchResults(local, remote, 10)
     expect(merged.map((item) => item.id)).toEqual(["a", "b"])
+    expect(merged[0]?.subject).toBe("remote subject")
+    expect(merged[0]?.from).toBe("remote@example.com")
+    expect(merged[0]?.received).toBe("2026-10-25T10:00:00Z")
+    expect(merged[0]?.isRead).toBe(true)
+    expect(merged[0]?.conversationId).toBe("conv-remote")
     expect(merged[0]?.to).toEqual(["to@example.com"])
     expect(merged[0]?.cc).toEqual(["cc@example.com"])
     expect(merged[0]?.recipientsKnown).toBe(true)
     expect(merged[0]?.hasAttachments).toBe(true)
-    expect(merged[0]?.preview).toBe("local")
+    // The cached preview is body-derived and may be longer than the EWS one.
+    expect(merged[0]?.preview).toBe("local preview")
   })
 
   test("sorts newest first and respects the limit", () => {
@@ -48,5 +70,9 @@ describe("mergeSearchResults", () => {
     expect(mergeSearchResults([message("local", "2026-10-23T00:00:00Z")], [], 10).map((item) => item.id)).toEqual([
       "local",
     ])
+  })
+
+  test("treats a negative limit as zero", () => {
+    expect(mergeSearchResults([message("a", "2026-10-23T00:00:00Z")], [], -1)).toEqual([])
   })
 })
