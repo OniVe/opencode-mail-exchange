@@ -81,13 +81,13 @@ URL, логин, пароль и адрес ящика **не имеют зна�
 | `codemode` | `MAIL_CODEMODE` | `false` | `false` — tools видны напрямую; `true` — только через Code Mode `execute` (глобально, не per-account) |
 | `caFile` | `MAIL_CA_FILE` | — | путь к PEM; проверяется на существование и используется для подсказки про `NODE_EXTRA_CA_CERTS` (само доверие TLS задаётся только этой env) |
 
-Верхнеуровневые опции наследуются записями `accounts[]`; значения аккаунта перекрывают их.
+Верхнеуровневые опции наследуются записями `accounts[]`; значения аккаунта перекрывают их (кроме `codemode` — он глобальный).
 
 ## Инструменты
 
 | Tool | Что делает |
 |---|---|
-| `mail_accounts` | список аккаунтов (id, адрес) |
+| `mail_accounts` | список аккаунтов (id, адрес, EWS URL, режим хранения) |
 | `mail_folders` | список папок с unread/total |
 | `mail_list` | письма в папке (метаданные, пагинация; получатели лениво добираются из EWS) |
 | `mail_search` | поиск: локальный FTS, иначе EWS (получатели так же лениво) |
@@ -100,6 +100,7 @@ URL, логин, пароль и адрес ящика **не имеют зна�
 
 Все инструменты регистрируются с `codemode` из опции плагина: по умолчанию `false` — модель вызывает их напрямую, не через Code Mode `execute`. `codemode: true` скрывает прямые вызовы и оставляет только `execute` (полезно, если каталог инструментов разрастается). Опция глобальная: инструменты регистрируются один раз, per-account значение игнорируется.
 Параметр `account` (id из `mail_accounts`) выбирает ящик; по умолчанию — первый аккаунт.
+Права инструментов: `mail.read` для чтения, `mail.draft` для черновиков, `mail.send` для отправки.
 
 **Получатели в `mail_list`/`mail_search`.** `SyncFolderItems` не приносит `To`/`Cc`, поэтому строки индекса
 могут знать только конверт. Для такой страницы `mail_list`/`mail_search` делают один `BindToItems`
@@ -162,4 +163,5 @@ bun test
 bun run lint
 ```
 
-Живой smoke (read-only): `lab/smoke.ts` — см. `lab/spike-ews/README.md` про env и CA.
+Живой smoke (read-only): [lab/smoke.ts](https://github.com/OniVe/opencode-mail-exchange/blob/main/lab/smoke.ts) — см.
+[lab/spike-ews/README.md](https://github.com/OniVe/opencode-mail-exchange/blob/main/lab/spike-ews/README.md) про env и CA.

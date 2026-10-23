@@ -81,13 +81,13 @@ The repository contains no real hosts, credentials or addresses; examples use `e
 | `codemode` | `MAIL_CODEMODE` | `false` | `false` — tools are listed directly; `true` — only through Code Mode `execute` (global, not per-account) |
 | `caFile` | `MAIL_CA_FILE` | — | path to a PEM; checked for existence and used for a `NODE_EXTRA_CA_CERTS` hint (TLS trust itself is configured only via that env var) |
 
-Top-level options are inherited by `accounts[]` entries; per-account values win.
+Top-level options are inherited by `accounts[]` entries; per-account values win (except `codemode`, which is global).
 
 ## Tools
 
 | Tool | What it does |
 |---|---|
-| `mail_accounts` | list accounts (id, address) |
+| `mail_accounts` | list accounts (id, address, EWS URL, storage mode) |
 | `mail_folders` | list folders with unread/total counts |
 | `mail_list` | messages in a folder (metadata, paging; recipients are enriched lazily from EWS) |
 | `mail_search` | local FTS first, EWS fallback (recipients are enriched lazily too) |
@@ -102,6 +102,7 @@ All tools use the plugin's `codemode` option: by default `false`, so the model c
 through Code Mode `execute`. `codemode: true` hides direct calls and leaves only `execute` (useful when the tool
 catalog grows). The option is global: tools are registered once, and a per-account value is ignored.
 The `account` argument (an id from `mail_accounts`) selects the mailbox; the first account is the default.
+Tool permissions: `mail.read` for read tools, `mail.draft` for drafts, `mail.send` for sending.
 
 **Recipients in `mail_list`/`mail_search`.** `SyncFolderItems` does not return `To`/`Cc`, so index rows may only
 know the envelope. For such a page, `mail_list`/`mail_search` performs one `BindToItems`
@@ -169,4 +170,5 @@ bun test
 bun run lint
 ```
 
-Live smoke (read-only): `lab/smoke.ts` — see `lab/spike-ews/README.md` for env and CA setup.
+Live smoke (read-only): [lab/smoke.ts](https://github.com/OniVe/opencode-mail-exchange/blob/main/lab/smoke.ts) — see
+[lab/spike-ews/README.md](https://github.com/OniVe/opencode-mail-exchange/blob/main/lab/spike-ews/README.md) for env and CA setup.

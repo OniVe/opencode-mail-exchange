@@ -12,8 +12,7 @@
     "README.md",
     "README.ru.md",
     "risks.md",
-    "docs/roadmap.md",
-    "lab/spike-ews/README.md"
+    "docs/roadmap.md"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
