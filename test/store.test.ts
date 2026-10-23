@@ -899,6 +899,8 @@ describe("store", () => {
       message("s30", "2026-10-23 10:00:30", "2026-10-11T09:00:00Z"),
       message("z30", "2026-10-23T10:00:30Z", "2026-10-14T09:00:00Z"),
       message("off30", "2026-10-23T10:00:30+03:00", "2026-10-15T09:00:00Z"),
+      message("ztrap", "2026-10-23T09:00 start, literal 10:00:30Z in notes", "2026-10-16T09:00:00Z"),
+      message("offtrap", "2026-10-23T09:00 start, literal 10:00:30+03:00 in notes", "2026-10-17T09:00:00Z"),
       message("plain", "2026-10-23T10:00", "2026-10-12T09:00:00Z"),
       // A literal time in prose must not satisfy a time filter (discriminates text fallback).
       message("literal", "2026-10-23 09:00 start, literal 10:00:30 in notes", "2026-10-13T09:00:00Z"),
@@ -928,6 +930,9 @@ describe("store", () => {
     expect(store.search("2026-10-23T10:00:15 ,", 10).map((item) => item.id)).toEqual(["s15"])
     expect(store.search("2026-10-23T10:00:30Z,", 10).map((item) => item.id)).toEqual(["z30"])
     expect(store.search("2026-10-23T10:00:30+03:00,", 10).map((item) => item.id)).toEqual(["off30"])
+    // Zone traps in prose must not satisfy the time filter (text fallback would include them).
+    expect(store.search("2026-10-23 10:00:30Z,", 10).map((item) => item.id)).toEqual(["z30"])
+    expect(store.search("2026-10-23 10:00:30+03:00,", 10).map((item) => item.id)).toEqual(["off30"])
     expect(
       store
         .search("2026-10-23 10:00", 10)
@@ -995,7 +1000,7 @@ describe("store", () => {
     // Early exit must not be slower than a full scan; absolute CI speed cancels out.
     expect(denseMs).toBeLessThanOrEqual(sparseMs + 5)
     // Catastrophe cap: a synchronous date scan must never block for long.
-    expect(denseMs).toBeLessThan(30)
+    expect(denseMs).toBeLessThan(10)
     // Normalization must stay linear: 64 KB costs at most a small multiple of 4 KB.
     // On the quadratic revision this ratio is ~250x (6 s vs 25 ms).
     const poison4 = `2026-10-23 x${",Z".repeat(2000)}`
@@ -1008,8 +1013,8 @@ describe("store", () => {
     expect(poisoned[0]?.id).toBe("poison64")
     const scan64 = timeOf(() => store.search("2026-10-23", 20))
     const query64 = timeOf(() => store.search(poison64, 20))
-    expect(scan64).toBeLessThanOrEqual(scan4 * 8 + 50)
-    expect(query64).toBeLessThanOrEqual(query4 * 8 + 50)
+    expect(scan64).toBeLessThanOrEqual(scan4 * 4 + 10)
+    expect(query64).toBeLessThanOrEqual(query4 * 3 + 20)
     // Catastrophe caps: the quadratic revision took seconds here.
     expect(scan64).toBeLessThan(150)
     expect(query64).toBeLessThan(150)
