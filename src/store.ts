@@ -106,18 +106,18 @@ const HOURS = [
 /** Parses a date or date-time query; invalid hours (24+) are not treated as dates. */
 const parseDateTime = (value: string): DateTimeParts | undefined => {
   const match =
-    /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[Tt](\d{1,2})(?::(\d{2})|[Hh](\d{2}))?([Zz]|[+-]\d{2}:?\d{2})?|[Zz])?$/.exec(
+    /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[Tt](\d{1,2})(?::(\d{2})(?::(\d{2}))?|[Hh](\d{2}))?([Zz]|[+-]\d{2}:?\d{2})?|[Zz])?$/.exec(
       value,
     )
   if (!match) return undefined
   const hour = match[4]
   if (hour !== undefined && Number(hour) > 23) return undefined
   const minute = match[5]
-  const hminute = match[6]
+  const hminute = match[7]
   if (minute !== undefined && Number(minute) > 59) return undefined
   if (hminute !== undefined && Number(hminute) > 59) return undefined
-  const mode = hour === undefined ? "all" : hminute !== undefined ? "hourH" : match[7] !== undefined ? "hourZ" : "hour"
-  const zoneRaw = match[7]
+  const mode = hour === undefined ? "all" : hminute !== undefined ? "hourH" : match[8] !== undefined ? "hourZ" : "hour"
+  const zoneRaw = match[8]
   const zone = zoneRaw === undefined ? undefined : /^[Zz]$/.test(zoneRaw) ? "Z" : "offset"
   const offset = zone === "offset" ? zoneRaw.replace(":", "") : undefined
   return { year: match[1], month: match[2], day: match[3], hour, minute, hminute, zone, offset, mode }
@@ -135,10 +135,23 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string } 
     const date = parseDateTime(compactPrefix[1])
     if (date) {
       const rest = compactPrefix[2]?.trim()
-      if (rest && /^\d{1,2}(?::\d{2})?$/.test(rest)) {
-        const [hour, minute] = rest.split(":")
+      const timeRest = rest ? /^(\d{1,2})(?::(\d{2})(?::(\d{2}))?|[Hh](\d{2}))?(?:\s+(.*))?$/.exec(rest) : undefined
+      if (timeRest && (timeRest[2] !== undefined || timeRest[3] !== undefined || timeRest[4] !== undefined)) {
+        const hour = timeRest[1]
+        const minute = timeRest[2]
+        const hminute = timeRest[4]
         if (Number(hour) > 23 || (minute !== undefined && Number(minute) > 59)) return undefined
-        return { date: { ...date, hour, minute, mode: "hour" } }
+        if (hminute !== undefined && Number(hminute) > 59) return undefined
+        return {
+          date: {
+            ...date,
+            hour,
+            minute,
+            hminute,
+            mode: hminute !== undefined ? "hourH" : "hour",
+          },
+          text: timeRest[5]?.trim() || undefined,
+        }
       }
       return { date, text: rest || undefined }
     }
@@ -565,7 +578,7 @@ export function openStore(config: MailConfig): Store | undefined {
           let pattern = ""
           for (const char of needle) {
             if (/[\p{L}\p{N}]/u.test(char)) pattern += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-            else pattern += `[^\\p{L}\\p{N}]{0,2}${char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^\\p{L}\\p{N}]{0,2}`
+            else pattern += `[^\\p{L}\\p{N}]{0,4}${char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^\\p{L}\\p{N}]{0,4}`
           }
           const prefix = /^\d/.test(needle) ? "(^|[^0-9])" : /^[\p{L}\p{N}]/u.test(needle) ? "(^|[^\\p{L}\\p{N}])" : ""
           return new RegExp(`${prefix}${pattern}`, "iu").test(lower)

@@ -608,6 +608,28 @@ describe("store", () => {
     rmSync(config.dataDir, { recursive: true, force: true })
   })
 
+  test("space h-time, seconds and wide punctuation gaps", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      message("hSpace", "2026-10-23 10h30", "2026-10-10T09:00:00Z"),
+      message("hT", "2026-10-23T10h30", "2026-10-11T09:00:00Z"),
+      message("secSpace", "2026-10-23 10:00:00", "2026-10-12T09:00:00Z"),
+      message("secT", "2026-10-23T10:00:00", "2026-10-13T09:00:00Z"),
+      message("rd3", "2026-10-23 R   &   D roadmap", "2026-10-14T09:00:00Z"),
+      message("cpp3", "2026-10-23 C   +   + notes", "2026-10-15T09:00:00Z"),
+    ])
+    expect(store.search("2026-10-23 10h30", 10).map((item) => item.id)).toEqual(["hT", "hSpace"])
+    expect(store.search("2026-10-23T10h30", 10).map((item) => item.id)).toEqual(["hT", "hSpace"])
+    expect(store.search("2026-10-23T10:00:00", 10).map((item) => item.id)).toContain("secT")
+    expect(store.search("2026-10-23 10:00:00", 10).map((item) => item.id)).toContain("secSpace")
+    expect(store.search("2026-10-23 R&D", 10).map((item) => item.id)).toEqual(["rd3"])
+    expect(store.search("2026-10-23 C++", 10).map((item) => item.id)).toEqual(["cpp3"])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
   test("a single-digit ISO hour still matches the date", () => {
     const config = baseConfig()
     const store = openStore(config)
