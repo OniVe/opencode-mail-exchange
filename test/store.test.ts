@@ -457,6 +457,16 @@ describe("store", () => {
     rmSync(config.dataDir, { recursive: true, force: true })
   })
 
+  test("a single-digit ISO hour still matches the date", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [message("single", "2026-10-23T3:00:00Z meeting", "2026-10-18T09:00:00Z")])
+    expect(store.search("2026-10-23", 10).map((item) => item.id)).toEqual(["single"])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
   test("a date does not match a longer numeric suffix", () => {
     const config = baseConfig()
     const store = openStore(config)
