@@ -752,6 +752,21 @@ describe("store", () => {
     rmSync(config.dataDir, { recursive: true, force: true })
   })
 
+  test("one-digit seconds and a minute fraction are not times", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      message("secbad", "2026-10-23T10:00:0", "2026-10-10T09:00:00Z"),
+      message("minfrac", "2026-10-23T24:00.500", "2026-10-11T09:00:00Z"),
+    ])
+    expect(store.search("2026-10-23", 10)).toEqual([])
+    expect(store.search("2026-10-23T10:00:0", 10)).toEqual([])
+    expect(store.search("2026-10-23T24:00.500", 10)).toEqual([])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
   test("a malformed time inside date+text stays textual", () => {
     const config = baseConfig()
     const store = openStore(config)
@@ -852,7 +867,7 @@ describe("store", () => {
     const elapsed = performance.now() - started
     expect(found).toHaveLength(20)
     // Generous bound: catches quadratic regressions, not CI jitter.
-    expect(elapsed).toBeLessThan(500)
+    expect(elapsed).toBeLessThan(200)
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })

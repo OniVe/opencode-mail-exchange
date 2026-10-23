@@ -151,13 +151,13 @@ const parseDateTime = (value: string): DateTimeParts | undefined => {
 const parseSearchDate = (query: string): { date: DateTimeParts; text?: string; invalid?: boolean } | undefined => {
   const compact = parseDateTime(query.trim())
   if (compact) return { date: compact }
-  // A single-digit minute ("T10:0", "10:0") is malformed time, but only when it is
-  // the whole query: a date+text query may legitimately contain such a literal.
-  const shortMinute =
-    /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:[Tt]\d{1,2}:\d(?!\d)(?::\d{1,2})?(?:[Zz]|[+-]\d{2}:?\d{2})?|\s+\d{1,2}:\d(?!\d)(?::\d{1,2})?(?:[Zz]|[+-]\d{2}:?\d{2})?)$/.test(
+  // A malformed time component ("T10:0", "T10:00:0", "T24:00.500") is not a date-time,
+  // but only when it is the whole query: date+text may contain such a literal.
+  const malformedTime =
+    /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:[Tt]|\s+)(?:\d{1,2}:\d(?!\d)(?::\d{1,2})?|\d{1,2}:\d{2}:\d(?!\d)|\d{1,2}:\d{2}\.\d+)(?:[Zz]|[+-]\d{2}:?\d{2})?$/.test(
       query.trim(),
     )
-  if (shortMinute) {
+  if (malformedTime) {
     const base = /^(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})/.exec(query.trim())?.[1]
     const baseDate = base ? parseDateTime(base) : undefined
     if (baseDate) return { date: baseDate, invalid: true }
@@ -195,6 +195,7 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string; i
       const zoneRaw = timeRest[6]
       if (!isAllowedHour(Number(hour), minute, seconds, hminute, fraction)) return { date, invalid: true }
       if (minute !== undefined && Number(minute) > 59) return { date, invalid: true }
+      if (seconds !== undefined && Number(seconds) > 59) return { date, invalid: true }
       if (hminute !== undefined && Number(hminute) > 59) return { date, invalid: true }
       const zone = zoneRaw === undefined ? undefined : /^[Zz]$/.test(zoneRaw) ? "Z" : "offset"
       const offset = zone === "offset" ? zoneRaw?.replace(":", "") : undefined
@@ -281,7 +282,9 @@ const parseTimeSuffix = (rest: string): ParsedTime | undefined => {
   if (seconds !== undefined && Number(seconds) > 59) return undefined
   const boundary = rest[match[0].length] ?? ""
   if (/[A-Za-z0-9]/.test(boundary)) return undefined
-  if ((boundary === ":" || boundary === ".") && minute === undefined) return undefined
+  // "T10:00:0" (one-digit seconds) and "T24:00.500" (fraction without seconds) are
+  // malformed, not "10:00"/"24:00".
+  if ((boundary === ":" || boundary === ".") && seconds === undefined) return undefined
   const zoneRaw = match[7]
   const zone = zoneRaw === undefined ? undefined : /^[Zz]$/.test(zoneRaw) ? "Z" : "offset"
   const offset = zone === "offset" ? zoneRaw.replace(":", "") : undefined
