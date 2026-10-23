@@ -82,7 +82,8 @@ const stripControlChars = (value: string): string => {
 
 interface FtsGroup {
   tokens: string[]
-  prefixAll: boolean
+  primaryPrefixAll: boolean
+  fallbackPrefixAll: boolean
 }
 
 const ftsQueries = (query: string): { primary: string; fallback?: string } | undefined => {
@@ -106,13 +107,18 @@ const ftsQueries = (query: string): { primary: string; fallback?: string } | und
     }
     // Dates and email addresses are often typed partially: "202-10" and
     // "j.doe@example.com" must still match "2026-10-23" / "john.doe@...".
-    const prefixAll = fragment.includes("@") || fragment.includes(".") || tokens.every((token) => /^\d+$/.test(token))
+    // Dotted words ("v1.2", "j.doe") get a prefix fallback only; their primary
+    // phrase stays exact so "v1.2" does not match "v1 200".
+    const allNumeric = tokens.every((token) => /^\d+$/.test(token))
+    const primaryPrefixAll = fragment.includes("@") || allNumeric
+    const fallbackPrefixAll = primaryPrefixAll || fragment.includes(".")
     if (joinNext && groups.length > 0) {
       const last = groups[groups.length - 1]
       last.tokens.push(...tokens)
-      last.prefixAll = last.prefixAll || prefixAll
+      last.primaryPrefixAll = last.primaryPrefixAll || primaryPrefixAll
+      last.fallbackPrefixAll = last.fallbackPrefixAll || fallbackPrefixAll
     } else {
-      groups.push({ tokens, prefixAll })
+      groups.push({ tokens, primaryPrefixAll, fallbackPrefixAll })
     }
     joinNext = false
   }
@@ -127,7 +133,7 @@ const ftsQueries = (query: string): { primary: string; fallback?: string } | und
       fallback.push(term)
       continue
     }
-    if (group.prefixAll) {
+    if (group.primaryPrefixAll) {
       // Phrase first, with a prefix on the last token: `2026-10-23` also matches
       // `2026-10-23T10:00` (token `23t10`). A fully partial date (`202-10`) still
       // needs the all-prefix second pass.
@@ -141,7 +147,12 @@ const ftsQueries = (query: string): { primary: string; fallback?: string } | und
     // tails ("AT&T", "I&T", "R&D") stay exact to avoid matching "at the"/"I think".
     const term = last.length >= 2 ? `"${group.tokens.join(" ")}"*` : `"${group.tokens.join(" ")}"`
     primary.push(term)
-    fallback.push(term)
+    if (group.fallbackPrefixAll) {
+      fallback.push(group.tokens.map((token) => `"${token}"*`).join(" AND "))
+      needsFallback = true
+    } else {
+      fallback.push(term)
+    }
   }
   if (primary.length === 0) return undefined
   return {

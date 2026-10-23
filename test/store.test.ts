@@ -406,6 +406,21 @@ describe("store", () => {
     rmSync(config.dataDir, { recursive: true, force: true })
   })
 
+  test("dotted versions stay exact in the primary pass", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      message("v12", "v1.2 release", "2026-10-16T09:00:00Z"),
+      message("v123", "v1.2.3 release", "2026-10-15T09:00:00Z"),
+      message("v1200", "v1 200 units", "2026-10-24T09:00:00Z"),
+    ])
+    expect(store.search("v1.2", 1).map((item) => item.id)).toEqual(["v12"])
+    expect(store.search("v1.2", 10).map((item) => item.id)).toEqual(["v12", "v123"])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
   test("an exact numeric date is not displaced by newer partial-number noise", () => {
     const config = baseConfig()
     const store = openStore(config)
