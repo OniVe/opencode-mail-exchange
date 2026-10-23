@@ -565,7 +565,7 @@ export function openStore(config: MailConfig): Store | undefined {
           let pattern = ""
           for (const char of needle) {
             if (/[\p{L}\p{N}]/u.test(char)) pattern += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-            else pattern += `[^\\p{L}\\p{N}]*${char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^\\p{L}\\p{N}]*`
+            else pattern += `[^\\p{L}\\p{N}]{0,2}${char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^\\p{L}\\p{N}]{0,2}`
           }
           const prefix = /^\d/.test(needle) ? "(^|[^0-9])" : /^[\p{L}\p{N}]/u.test(needle) ? "(^|[^\\p{L}\\p{N}])" : ""
           return new RegExp(`${prefix}${pattern}`, "iu").test(lower)
