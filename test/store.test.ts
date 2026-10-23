@@ -119,7 +119,7 @@ describe("resolveConfig", () => {
   test("rejects two accounts resolving to the same dataDir (case-folded on win32)", () => {
     const root = mkdtempSync(path.join(tmpdir(), "mail-dup-"))
     const shared = path.join(root, "Same", "mail")
-    const other = process.platform === "win32" ? path.join(root, "same", "MAIL") : path.join(root, "other")
+    const other = process.platform === "win32" ? path.join(root, "same", "MAIL") : shared
     expect(() =>
       resolveAccounts(
         {
