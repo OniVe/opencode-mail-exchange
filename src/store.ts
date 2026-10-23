@@ -241,11 +241,14 @@ const matchesDateText = (text: string, query: DateTimeParts): boolean => {
       match = DATE_TEXT.exec(text)
       continue
     }
-    if (query.minute !== undefined && (time.minute ?? "00") !== query.minute) {
+    if (
+      query.minute !== undefined &&
+      (time.minute ?? time.hminute ?? (time.hour !== undefined ? "00" : undefined)) !== query.minute
+    ) {
       match = DATE_TEXT.exec(text)
       continue
     }
-    if (query.mode === "hourZ") {
+    if (query.zone !== undefined) {
       if (query.zone === "Z" ? time.zone !== "Z" : time.zone !== "offset" || time.offset !== query.offset) {
         match = DATE_TEXT.exec(text)
         continue
@@ -521,11 +524,12 @@ export function openStore(config: MailConfig): Store | undefined {
 
   const searchByDate = (date: DateTimeParts, take: number, rest?: string): MessageSummary[] => {
     const pattern = `%${date.year}%`
+    // Keep punctuation inside terms (C++, C#, R&D); strip only surrounding quotes.
     const needles = rest
       ? rest
           .toLowerCase()
-          .replace(/[^\p{L}\p{N}]+/gu, " ")
           .split(/\s+/)
+          .map((token) => token.replace(/^["']+|["']+$/g, ""))
           .filter(Boolean)
       : []
     const rows = db
@@ -540,8 +544,15 @@ export function openStore(config: MailConfig): Store | undefined {
       .filter((row) => {
         const text = [row.subject, row.from_addr, row.preview, row.body ?? ""].join("\n")
         if (!matchesDateText(text, date)) return false
-        const lower = text.toLowerCase()
-        return needles.every((needle) => lower.includes(needle))
+        // Ignore the date itself when matching text terms: "2026-10-23 10 report"
+        // must not satisfy "10" from the month.
+        const withoutDate = text.replace(new RegExp(DATE_TEXT.source, "gu"), " ")
+        const lower = withoutDate.toLowerCase()
+        return needles.every((needle) => {
+          const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+          const edge = /^\d+$/.test(needle) ? "0-9" : "\\p{L}\\p{N}"
+          return new RegExp(`(^|[^${edge}])${escaped}([^${edge}]|$)`, "iu").test(lower)
+        })
       })
       .slice(0, take)
       .map(rowToSummary)
