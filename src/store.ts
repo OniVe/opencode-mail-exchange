@@ -147,6 +147,53 @@ const parseDateTime = (value: string): DateTimeParts | undefined => {
   return { year: match[1], month: match[2], day: match[3], hour, minute, second: seconds, hminute, zone, offset, mode }
 }
 
+/** Removes trailing punctuation and zone/offset suffixes in one linear pass. */
+const stripTimeSuffixes = (value: string): string => {
+  const isDigit = (index: number): boolean => {
+    const code = value.charCodeAt(index)
+    return code >= 48 && code <= 57
+  }
+  let end = value.length
+  while (end > 0) {
+    const char = value[end - 1] ?? ""
+    if (char === "." || char === "," || char === ";" || char === ":" || char === "!" || char === "?") {
+      end -= 1
+      continue
+    }
+    if (char === "Z" || char === "z") {
+      end -= 1
+      continue
+    }
+    const sign = value[end - 6]
+    if (
+      end >= 6 &&
+      (sign === "+" || sign === "-") &&
+      isDigit(end - 5) &&
+      isDigit(end - 4) &&
+      value[end - 3] === ":" &&
+      isDigit(end - 2) &&
+      isDigit(end - 1)
+    ) {
+      end -= 6
+      continue
+    }
+    const shortSign = value[end - 5]
+    if (
+      end >= 5 &&
+      (shortSign === "+" || shortSign === "-") &&
+      isDigit(end - 4) &&
+      isDigit(end - 3) &&
+      isDigit(end - 2) &&
+      isDigit(end - 1)
+    ) {
+      end -= 5
+      continue
+    }
+    break
+  }
+  return value.slice(0, end)
+}
+
 /** Date-only or date-time query, including the whitespace form "2026 10 23". */
 const parseSearchDate = (query: string): { date: DateTimeParts; text?: string; invalid?: boolean } | undefined => {
   const compact = parseDateTime(query.trim())
@@ -155,12 +202,7 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string; i
   // but only when it is the whole query: date+text may contain such a literal. Trailing
   // punctuation and a zone/offset are stripped in any order ("10:00:0,Z"), and a
   // one-digit hour with a one-digit minute is a ratio ("1:2"), not a broken time.
-  let malformedProbe = query.trim()
-  let previousProbe = ""
-  while (malformedProbe !== previousProbe) {
-    previousProbe = malformedProbe
-    malformedProbe = malformedProbe.replace(/[.,;:!?]+$/, "").replace(/(?:[Zz]|[+-]\d{2}:?\d{2})$/, "")
-  }
+  const malformedProbe = stripTimeSuffixes(query.trim())
   const malformedTime =
     /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:[Tt]|\s+)(?:\d{2}:\d(?!\d)(?:[.:]\d*)?|\d{1,2}:\d{2}::[0-9.]*|\d{1,2}:\d{2}:\.\d*|\d{1,2}:\d{2}\.\d+|\d{1,2}:\d{2}:\d(?!\d)(?:\.\d+)?)(?:[Zz]|[+-]\d{2}:?\d{2})?$/.test(
       malformedProbe,
@@ -334,14 +376,7 @@ const matchesDateText = (text: string, query: DateTimeParts): boolean => {
       // A clock-shaped numeric token must still parse: "10:00::0" is not 10:00.
       // "1:2" is a ratio (one-digit hour and minute), and "10:00am"/"1.2" are left alone.
       if (/^\s/.test(rest)) {
-        let token = rest.trimStart().split(/\s/, 1)[0] ?? ""
-        // Strip trailing punctuation and zone/offset in any order: "10:00:0,Z",
-        // "10:00:0+03:00Z" both reduce to the malformed core "10:00:0".
-        let previous = ""
-        while (token !== previous) {
-          previous = token
-          token = token.replace(/[.,;:!?]+$/, "").replace(/(?:[Zz]|[+-]\d{2}:?\d{2})$/, "")
-        }
+        const token = stripTimeSuffixes(rest.trimStart().split(/\s/, 1)[0] ?? "")
         const clockLike = /^\d{2}:\d/.test(token) || /^\d{1,2}:\d{2}/.test(token)
         if (clockLike && /^[0-9:.]+$/.test(token) && !parseTimeSuffix(` ${token}`)) {
           match = DATE_TEXT.exec(text)

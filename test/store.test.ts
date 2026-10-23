@@ -961,6 +961,15 @@ describe("store", () => {
     const sparseStarted = performance.now()
     expect(store.search("2026-12-31", 20)).toHaveLength(0)
     expect(performance.now() - sparseStarted).toBeLessThan(50)
+    // A hostile suffix tail must not make normalization quadratic (M75/M76).
+    const poison = `2026-10-23 x${",Z".repeat(2000)}`
+    store.upsertMessages("wk:inbox", [{ ...message("poisoned", poison, "2026-10-01T09:00:00Z") }])
+    const poisonScanStarted = performance.now()
+    expect(store.search("2026-12-31", 20)).toHaveLength(0)
+    expect(performance.now() - poisonScanStarted).toBeLessThan(50)
+    const poisonQueryStarted = performance.now()
+    store.search(poison, 20)
+    expect(performance.now() - poisonQueryStarted).toBeLessThan(50)
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })

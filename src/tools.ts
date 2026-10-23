@@ -193,6 +193,10 @@ export async function registerTools(
       execute: async (input) => {
         const typed = input as AccountInput & { query: string; limit?: number }
         try {
+          // Schema advertises maxLength, but execute receives a cast: enforce it here too.
+          if (typeof typed.query !== "string" || typed.query.length > 512) {
+            throw new Error("query is too long (max 512 characters)")
+          }
           return {
             content: json(
               await run(typed, (backend) =>
