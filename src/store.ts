@@ -93,6 +93,8 @@ interface DateTimeParts {
   hour?: string
   minute?: string
   hminute?: string
+  zone?: "Z" | "offset"
+  offset?: string
   mode: "all" | "hour" | "hourZ" | "hourH"
 }
 
@@ -115,26 +117,40 @@ const parseDateTime = (value: string): DateTimeParts | undefined => {
   if (minute !== undefined && Number(minute) > 59) return undefined
   if (hminute !== undefined && Number(hminute) > 59) return undefined
   const mode = hour === undefined ? "all" : hminute !== undefined ? "hourH" : match[7] !== undefined ? "hourZ" : "hour"
-  return { year: match[1], month: match[2], day: match[3], hour, minute, hminute, mode }
+  const zoneRaw = match[7]
+  const zone = zoneRaw === undefined ? undefined : /^[Zz]$/.test(zoneRaw) ? "Z" : "offset"
+  const offset = zone === "offset" ? zoneRaw.replace(":", "") : undefined
+  return { year: match[1], month: match[2], day: match[3], hour, minute, hminute, zone, offset, mode }
 }
 
 /** Date-only or date-time query, including the whitespace form "2026 10 23". */
-const parseSearchDate = (query: string): DateTimeParts | undefined => {
+const parseSearchDate = (query: string): { date: DateTimeParts; text?: string } | undefined => {
   const compact = parseDateTime(query.trim())
-  if (compact) return compact
-  const spaced = /^(\d{4})\s+(\d{1,2})\s+(\d{1,2})(?:\s+[Tt]?(\d{1,2})(?::(\d{2}))?)?$/.exec(query.trim())
+  if (compact) return { date: compact }
+  const compactPrefix =
+    /^(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:[Tt]\d{1,2}(?::\d{2}|[Hh]\d{2})?(?:[Zz]|[+-]\d{2}:?\d{2})?)?)(?:\s+(.*))?$/.exec(
+      query.trim(),
+    )
+  if (compactPrefix) {
+    const date = parseDateTime(compactPrefix[1])
+    if (date) return { date, text: compactPrefix[2]?.trim() || undefined }
+  }
+  const spaced = /^(\d{4})\s+(\d{1,2})\s+(\d{1,2})(?:\s+[Tt]?(\d{1,2})(?::(\d{2}))?)?(?:\s+(.*))?$/.exec(query.trim())
   if (!spaced) return undefined
   const hour = spaced[4]
   if (hour !== undefined && Number(hour) > 23) return undefined
   const minute = spaced[5]
   if (minute !== undefined && Number(minute) > 59) return undefined
   return {
-    year: spaced[1],
-    month: spaced[2],
-    day: spaced[3],
-    hour,
-    minute,
-    mode: hour === undefined ? "all" : "hour",
+    date: {
+      year: spaced[1],
+      month: spaced[2],
+      day: spaced[3],
+      hour,
+      minute,
+      mode: hour === undefined ? "all" : "hour",
+    },
+    text: spaced[6]?.trim() || undefined,
   }
 }
 
@@ -142,23 +158,28 @@ interface ParsedTime {
   hour?: string
   minute?: string
   hminute?: string
-  zone: boolean
+  zone?: "Z" | "offset"
+  offset?: string
 }
 
 /** Reads an ISO time suffix; a letter immediately after it invalidates the match. */
 const parseTimeSuffix = (rest: string): ParsedTime | undefined => {
-  if (/^[Zz]/.test(rest)) return { zone: true }
-  const match = /^[Tt ](\d{1,2})(?::(\d{2})|\.(\d{2})|[Hh](\d{2}))?(?::(\d{2}))?([Zz])?/.exec(rest)
+  if (/^[Zz]/.test(rest)) return { zone: "Z" }
+  const match =
+    /^[Tt ]?(\d{1,2})(?::(\d{2})(?::(\d{2})(?:\.\d+)?)?|\.(\d{2})|[Hh](\d{2}))?([Zz]|[+-]\d{2}:?\d{2})?/.exec(rest)
   if (!match) return undefined
   const hour = Number(match[1])
   if (hour > 23) return undefined
-  const minute = match[2] ?? match[3] ?? match[5]
-  const hminute = match[4]
+  const minute = match[2] ?? match[4]
+  const hminute = match[5]
   if (minute !== undefined && Number(minute) > 59) return undefined
   if (hminute !== undefined && Number(hminute) > 59) return undefined
   const boundary = rest[match[0].length] ?? ""
   if (/[A-Za-z0-9]/.test(boundary)) return undefined
-  return { hour: match[1], minute, hminute, zone: Boolean(match[6]) }
+  const zoneRaw = match[6]
+  const zone = zoneRaw === undefined ? undefined : /^[Zz]$/.test(zoneRaw) ? "Z" : "offset"
+  const offset = zone === "offset" ? zoneRaw.replace(":", "") : undefined
+  return { hour: match[1], minute, hminute, zone, offset }
 }
 
 const DATE_TEXT = /(?<!\d)(\d{4})[-/. ](\d{1,2})[-/. ](\d{1,2})(?!\d)/g
@@ -187,19 +208,19 @@ const matchesDateText = (text: string, query: DateTimeParts): boolean => {
         match = DATE_TEXT.exec(text)
         continue
       }
+      // A date followed by whitespace is a hit: "2026-10-23 10:00", "2026-10-23 5 items".
+      if (/^\s/.test(rest)) return true
       if (/^[A-Za-z]/.test(rest) && !/^[TtZz]/.test(rest)) {
         match = DATE_TEXT.exec(text)
         continue
       }
-      if (/^[TtZz]/.test(rest) || /^\s+\d/.test(rest)) {
-        if (!parseTimeSuffix(rest.trimStart())) {
-          match = DATE_TEXT.exec(text)
-          continue
-        }
+      if (/^[TtZz]/.test(rest) && !parseTimeSuffix(rest)) {
+        match = DATE_TEXT.exec(text)
+        continue
       }
       return true
     }
-    const time = parseTimeSuffix(rest.trimStart())
+    const time = parseTimeSuffix(rest)
     if (!time || time.hour === undefined) {
       match = DATE_TEXT.exec(text)
       continue
@@ -208,13 +229,15 @@ const matchesDateText = (text: string, query: DateTimeParts): boolean => {
       match = DATE_TEXT.exec(text)
       continue
     }
-    if (query.minute !== undefined && time.minute !== query.minute) {
+    if (query.minute !== undefined && (time.minute ?? "00") !== query.minute) {
       match = DATE_TEXT.exec(text)
       continue
     }
-    if (query.mode === "hourZ" && !time.zone) {
-      match = DATE_TEXT.exec(text)
-      continue
+    if (query.mode === "hourZ") {
+      if (query.zone === "Z" ? time.zone !== "Z" : time.zone !== "offset" || time.offset !== query.offset) {
+        match = DATE_TEXT.exec(text)
+        continue
+      }
     }
     if (query.mode === "hourH" && time.hminute === undefined) {
       match = DATE_TEXT.exec(text)
@@ -484,18 +507,24 @@ export function openStore(config: MailConfig): Store | undefined {
     )
   })
 
-  const searchByDate = (date: DateTimeParts, take: number): MessageSummary[] => {
+  const searchByDate = (date: DateTimeParts, take: number, rest?: string): MessageSummary[] => {
     const pattern = `%${date.year}%`
+    const needles = rest ? rest.toLowerCase().split(/\s+/).filter(Boolean) : []
     const rows = db
       .query(`
         select m.*, b.body from messages m
         left join bodies b on b.message_id = m.id
         where m.deleted = 0 and (m.subject like ? or m.preview like ? or b.body like ?)
-        order by m.received_ts desc
+        order by m.received_ts desc, m.id asc
       `)
       .all(pattern, pattern, pattern) as Array<MessageRow & { body: string | null }>
     return rows
-      .filter((row) => matchesDateText([row.subject, row.preview, row.body ?? ""].join("\n"), date))
+      .filter((row) => {
+        const text = [row.subject, row.preview, row.body ?? ""].join("\n")
+        if (!matchesDateText(text, date)) return false
+        const lower = text.toLowerCase()
+        return needles.every((needle) => lower.includes(needle))
+      })
       .slice(0, take)
       .map(rowToSummary)
   }
@@ -522,8 +551,8 @@ export function openStore(config: MailConfig): Store | undefined {
       if (take === 0) return []
       // Date/time queries get a date-aware scan: FTS tokens cannot represent every
       // ISO variant (padding, Z, h-minutes) without combinatorial alternatives.
-      const date = parseSearchDate(query)
-      if (date) return searchByDate(date, take)
+      const dateQuery = parseSearchDate(query)
+      if (dateQuery) return searchByDate(dateQuery.date, take, dateQuery.text)
       const queries = ftsQueries(query)
       if (!queries) return []
       // Newest first: `searchMessages` merges this page with the EWS page and keeps the

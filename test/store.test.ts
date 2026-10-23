@@ -504,6 +504,40 @@ describe("store", () => {
     rmSync(config.dataDir, { recursive: true, force: true })
   })
 
+  test("date scan handles space, offset, fractional Z and mixed text", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      message("sp_time", "2026-10-23 10:00", "2026-10-10T09:00:00Z"),
+      message("sp_num", "2026-10-23 5 items", "2026-10-11T09:00:00Z"),
+      message("sp_full", "2026 10 23 10:30", "2026-10-12T09:00:00Z"),
+      message("off", "2026-10-23T10+02:00", "2026-10-13T09:00:00Z"),
+      message("fracZ", "2026-10-23T10:00:00.000Z", "2026-10-14T09:00:00Z"),
+      message("z10", "2026-10-23T10Z", "2026-10-15T09:00:00Z"),
+      message("report", "2026-10-23 report", "2026-10-16T09:00:00Z"),
+      message("h99", "2026-10-23T10h99", "2026-10-17T09:00:00Z"),
+      message("htext", "2026-10-23T10h30text", "2026-10-18T09:00:00Z"),
+    ])
+    const all = store.search("2026-10-23", 20).map((item) => item.id)
+    expect(all).toContain("sp_time")
+    expect(all).toContain("sp_num")
+    expect(all).toContain("sp_full")
+    expect(all).toContain("off")
+    expect(all).toContain("fracZ")
+    expect(all).not.toContain("h99")
+    expect(all).not.toContain("htext")
+    expect(store.search("2026-10-23 10:00", 10).map((item) => item.id)).toContain("sp_time")
+    expect(store.search("2026 10 23 10:30", 10).map((item) => item.id)).toEqual(["sp_full"])
+    expect(store.search("2026-10-23T10+02:00", 10).map((item) => item.id)).toEqual(["off"])
+    expect(store.search("2026-10-23T10Z", 10).map((item) => item.id)).toContain("z10")
+    expect(store.search("2026-10-23T10Z", 10).map((item) => item.id)).not.toContain("off")
+    expect(store.search("2026-10-23T10:00Z", 10).map((item) => item.id)).toContain("fracZ")
+    expect(store.search("2026-10-23 report", 10).map((item) => item.id)).toEqual(["report"])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
   test("a single-digit ISO hour still matches the date", () => {
     const config = baseConfig()
     const store = openStore(config)
