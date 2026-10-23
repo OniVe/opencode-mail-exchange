@@ -322,6 +322,24 @@ describe("store", () => {
     rmSync(config.dataDir, { recursive: true, force: true })
   })
 
+  test("keeps punctuation-separated words adjacent (R&D is not r AND d)", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      message("true", "R&D roadmap review", "2026-10-23T09:00:00Z"),
+      message("noise-1", "Re: Draft agenda", "2026-10-23T08:00:00Z"),
+      message("noise-2", "Report data", "2026-10-23T07:00:00Z"),
+      message("noise-3", "Risk decision", "2026-10-23T06:00:00Z"),
+      message("qa", "Q&A session", "2026-10-23T05:00:00Z"),
+      message("quick", "Quick answer", "2026-10-23T04:00:00Z"),
+    ])
+    expect(store.search("R&D", 10).map((item) => item.id)).toEqual(["true"])
+    expect(store.search("Q&A", 10).map((item) => item.id)).toEqual(["qa"])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
   test("applies read flags", () => {
     const config = baseConfig()
     const store = openStore(config)

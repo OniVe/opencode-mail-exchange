@@ -81,16 +81,21 @@ const stripControlChars = (value: string): string => {
 }
 
 const ftsQuery = (query: string): string | undefined => {
-  // Split on everything that is not a letter or digit: FTS5's unicode61 tokenizer
-  // treats apostrophes and punctuation as separators, so "O'Brien" must become
-  // "o" AND "brien", not "obrien". Every token is kept: silently dropping the 9th
-  // token would return messages that do not match the query.
-  const tokens = stripControlChars(query)
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
+  // Split on whitespace first: punctuation inside a word ("R&D", "O'Brien") marks
+  // token boundaries, but the tokens must stay adjacent. `"r d"*` matches "R&D"
+  // (only the last token is a prefix) and does not match "Report data".
+  const terms = stripControlChars(query)
     .split(/\s+/)
+    .map((fragment) =>
+      fragment
+        .replace(/[^\p{L}\p{N}]+/gu, " ")
+        .trim()
+        .replace(/\s+/g, " "),
+    )
     .filter(Boolean)
-  if (tokens.length === 0) return undefined
-  return tokens.map((token) => `"${token}"*`).join(" AND ")
+    .map((fragment) => `"${fragment}"*`)
+  if (terms.length === 0) return undefined
+  return terms.join(" AND ")
 }
 
 const splitAddresses = (value: string | null | undefined): string[] =>
