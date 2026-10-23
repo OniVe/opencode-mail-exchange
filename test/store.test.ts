@@ -806,6 +806,10 @@ describe("store", () => {
       message("malformedNl", "2026-10-23\n10:00::0 agenda", "2026-10-20T09:00:00Z"),
       message("ampm", "2026-10-23 10:00am agenda", "2026-10-21T09:00:00Z"),
       message("utc", "2026-10-23 10:00UTC agenda", "2026-10-22T09:00:00Z"),
+      message("ratio", "2026-10-23 1:2 ratio", "2026-10-23T09:00:00Z"),
+      message("malComma", "2026-10-23 10:00::0, broken", "2026-10-24T09:00:00Z"),
+      message("malZone", "2026-10-23 10:00:0Z agenda", "2026-10-25T09:00:00Z"),
+      message("malOffset", "2026-10-23 10:00:0+03:00 agenda", "2026-10-26T09:00:00Z"),
     ])
     const expected = [
       "ampm",
@@ -816,6 +820,7 @@ describe("store", () => {
       "dotYear",
       "nl",
       "plain",
+      "ratio",
       "spaceDotNum",
       "tab",
       "twoSpaces",
@@ -832,7 +837,7 @@ describe("store", () => {
         .search("2026-10-23T10:00", 30)
         .map((item) => item.id)
         .sort(),
-    ).toEqual(expected.filter((id) => !["nl", "tab", "twoSpaces", "ampm", "utc"].includes(id)))
+    ).toEqual(expected.filter((id) => !["nl", "tab", "twoSpaces", "ampm", "utc", "ratio"].includes(id)))
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
@@ -946,7 +951,7 @@ describe("store", () => {
     // A sparse date still has to scan, but must stay in the same ballpark.
     const sparseStarted = performance.now()
     expect(store.search("2026-12-31", 20)).toHaveLength(0)
-    expect(performance.now() - sparseStarted).toBeLessThan(100)
+    expect(performance.now() - sparseStarted).toBeLessThan(50)
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
