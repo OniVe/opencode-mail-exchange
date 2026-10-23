@@ -86,7 +86,58 @@ interface FtsGroup {
   fallbackPrefixAll: boolean
 }
 
+interface DateTimeParts {
+  year: string
+  month: string
+  day: string
+  hour?: string
+  mode: "all" | "hour" | "hourZ" | "hourH"
+}
+
+const HOURS = [
+  ...Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, "0")),
+  ...Array.from({ length: 10 }, (_, hour) => String(hour)),
+]
+
+/** Parses a date or date-time query; invalid hours (24+) are not treated as dates. */
+const parseDateTime = (value: string): DateTimeParts | undefined => {
+  const match =
+    /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[Tt](\d{1,2})(?::\d{2}|[Hh](\d{2}))?([Zz]|[+-]\d{2}:?\d{2})?|[Zz])?$/.exec(
+      value,
+    )
+  if (!match) return undefined
+  const hour = match[4]
+  if (hour !== undefined && Number(hour) > 23) return undefined
+  const mode = hour === undefined ? "all" : match[5] !== undefined ? "hourH" : match[6] !== undefined ? "hourZ" : "hour"
+  return { year: match[1], month: match[2], day: match[3], hour, mode }
+}
+
+/**
+ * Exact alternatives for a date: the bare date, date+Z, and every valid clock
+ * variant (T10, T10Z, T10h30). Exact hours avoid the old 23* noise (t30/t99/t3text).
+ */
+const dateTerms = (parts: DateTimeParts): string[] => {
+  const base = `${parts.year} ${parts.month} ${parts.day}`
+  if (parts.mode === "all") {
+    const terms = [`"${base}"`, `"${base}z"`]
+    for (const hour of HOURS) {
+      terms.push(`"${base}t${hour}"`, `"${base}t${hour}z"`, `"${base}t${hour}h"*`)
+    }
+    return terms
+  }
+  if (!parts.hour) return []
+  const terms: string[] = []
+  if (parts.mode !== "hourH") terms.push(`"${base}t${parts.hour}"`, `"${base}t${parts.hour}z"`)
+  if (parts.mode !== "hourZ") terms.push(`"${base}t${parts.hour}h"*`)
+  return terms
+}
+
 const ftsQueries = (query: string): { primary: string; fallback?: string } | undefined => {
+  // A bare date/date-time is a single logical term: match every valid ISO variant
+  // (date, dateZ, T10, T10Z, T10h30) without prefix noise.
+  const whole = parseDateTime(query.trim())
+  if (whole) return { primary: dateTerms(whole).join(" OR ") }
+
   // Split on whitespace, then normalize each fragment. Punctuation inside a word
   // ("R&D", "O'Brien") marks token boundaries, but the tokens must stay adjacent:
   // `"r d"` matches "R&D" and does not match "Report data". A punctuation-only
@@ -135,24 +186,17 @@ const ftsQueries = (query: string): { primary: string; fallback?: string } | und
       fallback.push(term)
       continue
     }
+    if (group.tokens.length === 3 && group.tokens.every((token) => /^\d+$/.test(token))) {
+      const [year, month, day] = group.tokens
+      // Date-only: every valid ISO variant, no all-prefix fallback (that would
+      // reintroduce 2345/t30/t99/t3text noise).
+      const term = `(${dateTerms({ year, month, day, mode: "all" }).join(" OR ")})`
+      primary.push(term)
+      fallback.push(term)
+      continue
+    }
     if (group.primaryPrefixAll) {
-      // Dates need ISO support (`23t10`), but a bare last-token prefix also matches
-      // `2345`. For a 3-part numeric date use exact + ISO-prefix alternatives:
-      // "2026 10 23" OR "2026 10 23t"*. A fully partial date (`202-10`) still needs
-      // the all-prefix second pass.
-      if (group.tokens.length === 3 && group.tokens.every((token) => /^\d+$/.test(token))) {
-        const [year, month, day] = group.tokens
-        // ISO hours: exact 00-23 plus 0-9 (single-digit input). No prefix: a prefix
-        // would also match 23t30/23t99/23t3text. A bare t* would match 23TXN/23text.
-        const hours = [
-          ...Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, "0")),
-          ...Array.from({ length: 10 }, (_, hour) => String(hour)),
-        ]
-        const isoHours = hours.map((hour) => `("${year} ${month} ${day}t${hour}")`)
-        primary.push(`(("${year} ${month} ${day}") OR ${isoHours.join(" OR ")})`)
-      } else {
-        primary.push(`"${group.tokens.join(" ")}"*`)
-      }
+      primary.push(`"${group.tokens.join(" ")}"*`)
       fallback.push(group.tokens.map((token) => `"${token}"*`).join(" AND "))
       needsFallback = true
       continue

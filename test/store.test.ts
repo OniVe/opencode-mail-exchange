@@ -457,6 +457,25 @@ describe("store", () => {
     rmSync(config.dataDir, { recursive: true, force: true })
   })
 
+  test("ISO zone and h-suffix times match date and time queries", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      message("z10", "call 2026-10-23T10Z", "2026-10-18T09:00:00Z"),
+      message("z3", "call 2026-10-23T3Z", "2026-10-19T09:00:00Z"),
+      message("h10", "time 2026-10-23T10h30", "2026-10-20T09:00:00Z"),
+      message("t30", "invalid 2026-10-23T30:00", "2026-10-27T09:00:00Z"),
+      message("t3text", "invalid 2026-10-23T3text", "2026-10-29T09:00:00Z"),
+    ])
+    expect(store.search("2026-10-23", 10).map((item) => item.id)).toEqual(["h10", "z3", "z10"])
+    expect(store.search("2026-10-23T3", 10).map((item) => item.id)).toEqual(["z3"])
+    expect(store.search("2026-10-23T10Z", 10).map((item) => item.id)).toContain("z10")
+    expect(store.search("2026-10-23T10h30", 10).map((item) => item.id)).toEqual(["h10"])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
   test("a single-digit ISO hour still matches the date", () => {
     const config = baseConfig()
     const store = openStore(config)
