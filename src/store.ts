@@ -283,8 +283,12 @@ const parseTimeSuffix = (rest: string): ParsedTime | undefined => {
   const boundary = rest[match[0].length] ?? ""
   if (/[A-Za-z0-9]/.test(boundary)) return undefined
   // "T10:00:0" (one-digit seconds) and "T24:00.500" (fraction without seconds) are
-  // malformed, not "10:00"/"24:00".
-  if ((boundary === ":" || boundary === ".") && seconds === undefined) return undefined
+  // malformed. Ordinary punctuation after a minute-precision time ("T10:00. next",
+  // "T10:00: agenda") is not: only a following digit makes it malformed.
+  if ((boundary === ":" || boundary === ".") && seconds === undefined) {
+    const next = rest[match[0].length + 1] ?? ""
+    if (/[0-9]/.test(next)) return undefined
+  }
   const zoneRaw = match[7]
   const zone = zoneRaw === undefined ? undefined : /^[Zz]$/.test(zoneRaw) ? "Z" : "offset"
   const offset = zone === "offset" ? zoneRaw.replace(":", "") : undefined

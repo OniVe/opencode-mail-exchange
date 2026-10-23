@@ -767,6 +767,31 @@ describe("store", () => {
     rmSync(config.dataDir, { recursive: true, force: true })
   })
 
+  test("punctuation after a minute-precision time is just punctuation", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      message("plain", "2026-10-23T10:00", "2026-10-10T09:00:00Z"),
+      message("dotEnd", "2026-10-23T10:00. meeting notes", "2026-10-11T09:00:00Z"),
+      message("colonText", "2026-10-23T10:00: agenda item", "2026-10-12T09:00:00Z"),
+    ])
+    expect(
+      store
+        .search("2026-10-23", 10)
+        .map((item) => item.id)
+        .sort(),
+    ).toEqual(["colonText", "dotEnd", "plain"])
+    expect(
+      store
+        .search("2026-10-23T10:00", 10)
+        .map((item) => item.id)
+        .sort(),
+    ).toEqual(["colonText", "dotEnd", "plain"])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
   test("a malformed time inside date+text stays textual", () => {
     const config = baseConfig()
     const store = openStore(config)
@@ -795,6 +820,7 @@ describe("store", () => {
     expect(store.search("2026-10-23T24", 10)).toEqual([])
     // A non-finite limit must not return everything.
     expect(store.search("2026-10-23", Number.NaN)).toEqual([])
+    expect(store.search("2026-10-23", undefined as unknown as number)).toEqual([])
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
@@ -866,8 +892,12 @@ describe("store", () => {
     const found = store.search("2026-10-23", 20)
     const elapsed = performance.now() - started
     expect(found).toHaveLength(20)
-    // Generous bound: catches quadratic regressions, not CI jitter.
-    expect(elapsed).toBeLessThan(200)
+    // Catches order-of-magnitude regressions without depending on CI jitter.
+    expect(elapsed).toBeLessThan(50)
+    // A sparse date still has to scan, but must stay in the same ballpark.
+    const sparseStarted = performance.now()
+    expect(store.search("2026-12-31", 20)).toHaveLength(0)
+    expect(performance.now() - sparseStarted).toBeLessThan(200)
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
