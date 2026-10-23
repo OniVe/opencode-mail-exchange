@@ -990,10 +990,10 @@ describe("store", () => {
       action()
       return performance.now() - started
     }
-    const denseStarted = performance.now()
-    const found = store.search("2026-10-23", 20)
-    const denseMs = performance.now() - denseStarted
-    expect(found).toHaveLength(20)
+    expect(store.search("2026-10-23", 20)).toHaveLength(20)
+    // Median of three runs: a single GC pause must not fail the catastrophe cap.
+    const denseMs =
+      [0, 1, 2].map(() => timeOf(() => store.search("2026-10-23", 20))).sort((left, right) => left - right)[1] ?? 0
     const sparseStarted = performance.now()
     expect(store.search("2026-12-31", 20)).toHaveLength(0)
     const sparseMs = performance.now() - sparseStarted
