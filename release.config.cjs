@@ -8,9 +8,10 @@
  *   chore/ci/docs/... -> no release
  *
  * Publishing uses npm trusted publishing (OIDC), so no npm token is stored;
- * provenance is generated automatically. The package must be configured as a
- * trusted publisher on npmjs.com (repository OniVe/opencode-mail-exchange,
- * workflow release.yml) before the first CI release.
+ * `provenance: true` makes npm attach the build attestation to the release.
+ * The package must be configured as a trusted publisher on npmjs.com
+ * (repository OniVe/opencode-mail-exchange, workflow release.yml) before the
+ * first CI release.
  */
 module.exports = {
   branches: ["main"],
@@ -25,7 +26,7 @@ module.exports = {
       },
     ],
     "@semantic-release/release-notes-generator",
-    "@semantic-release/npm",
+    ["@semantic-release/npm", { provenance: true }],
     "@semantic-release/github",
   ],
 }
