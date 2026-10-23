@@ -35,14 +35,6 @@ OpenCode V2 plugin for on-prem Exchange: mail, calendar and contacts over EWS + 
 - [Development](#development)
 - [License](#license)
 
-## Features
-
-- 10 `mail_*` tools: accounts, folders, list, search, get, sync, draft, send, calendar, contacts.
-- Multiple mailboxes in one process with per-account credentials and SQLite.
-- Local SQLite index (WAL, FTS5) in `off` / `metadata` / `full` modes.
-- EWS/NTLM with explicit XML escaping, recipient validation and attachment limits.
-- Request timeout and cancellation via `context.signal`; multi-account routing with `AsyncLocalStorage`.
-
 ## About
 
 Reads and sends mail, lists calendar events and contacts from an on-prem Exchange mailbox through EWS with
@@ -50,6 +42,14 @@ NTLM. Runs inside OpenCode V2 as a native TypeScript plugin: Bun executes `src/i
 
 Verified on Exchange 2016 (build 15.1.2507.6), NTLMv2, internal CA. Bun 1.4.2, `@opencode/plugin` 2.0.26,
 77 tests.
+
+## Features
+
+- 10 `mail_*` tools: accounts, folders, list, search, get, sync, draft, send, calendar, contacts.
+- Multiple mailboxes in one process with per-account credentials and SQLite.
+- Storage modes `off` / `metadata` / `full`; local SQLite index in `metadata`/`full`, `off` = EWS-only.
+- EWS/NTLM with explicit XML escaping, recipient validation and attachment limits.
+- Request timeout and cancellation via `context.signal`; multi-account routing with `AsyncLocalStorage`.
 
 ### Built With
 
