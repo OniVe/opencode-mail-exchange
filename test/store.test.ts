@@ -472,6 +472,8 @@ describe("store", () => {
     expect(store.search("2026-10-23T3", 10).map((item) => item.id)).toEqual(["z3"])
     expect(store.search("2026-10-23T10Z", 10).map((item) => item.id)).toContain("z10")
     expect(store.search("2026-10-23T10h30", 10).map((item) => item.id)).toEqual(["h10"])
+    expect(store.search("2026-10-23T10:30", 10).map((item) => item.id)).toEqual(["h10"])
+    expect(store.search("2026-10-23T10h30Z", 10)).toEqual([])
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
@@ -558,6 +560,10 @@ describe("store", () => {
       message("sp_num", "2026-10-23 5 items", "2026-10-22T09:00:00Z"),
       message("fifteen", "2026-10-23T15:00 items", "2026-10-23T09:00:00Z"),
       message("obrien", "2026-10-23 O'Brien", "2026-10-24T09:00:00Z"),
+      message("rd", "2026-10-23 R&D roadmap", "2026-10-25T09:00:00Z"),
+      message("rdSpaced", "2026-10-23 R & D roadmap", "2026-10-26T09:00:00Z"),
+      message("cppSpaced", "2026-10-23 C + + notes", "2026-10-27T09:00:00Z"),
+      { ...message("fromDate", "no date in text", "2026-10-28T09:00:00Z"), from: "2026-10-23@example.com" },
     ])
     expect(store.search("2026-10-23 unique", 10).map((item) => item.id)).toEqual(["alice"])
     const all = store.search("2026-10-23", 20).map((item) => item.id)
@@ -567,7 +573,6 @@ describe("store", () => {
     expect(store.search("2026-10-23 10", 10).map((item) => item.id)).toEqual(["rT10", "t10"])
     expect(store.search('2026-10-23 "quarterly report"', 10).map((item) => item.id)).toEqual(["quote"])
     expect(store.search("2026-10-23 & report", 10).map((item) => item.id)).toEqual(["amp"])
-    expect(store.search("2026-10-23 C++", 10).map((item) => item.id)).toEqual(["cpp"])
     expect(store.search("2026-10-23 C#", 10).map((item) => item.id)).toEqual(["csharp"])
     expect(store.search("2026-10-23 10 report", 10).map((item) => item.id)).toEqual(["rT10"])
     expect(store.search("2026-10-23 5 items", 10).map((item) => item.id)).toEqual(["sp_num"])
@@ -575,6 +580,11 @@ describe("store", () => {
     expect(store.search("2026-10-23 O'Bri", 10).map((item) => item.id)).toEqual(["obrien"])
     expect(store.search("2026-10-23 report,", 10).map((item) => item.id)).toContain("quote")
     expect(store.search("2026-10-23 10:00 report", 10).map((item) => item.id)).toEqual(["rT10"])
+    expect(store.search("2026-10-23 (report)", 10).map((item) => item.id)).toContain("quote")
+    expect(store.search("2026-10-23 report.", 10).map((item) => item.id)).toContain("quote")
+    expect(store.search("2026-10-23 R&D", 10).map((item) => item.id)).toEqual(["rdSpaced", "rd"])
+    expect(store.search("2026-10-23 C++", 10).map((item) => item.id)).toEqual(["cppSpaced", "cpp"])
+    expect(store.search("2026-10-23", 30).map((item) => item.id)).toContain("fromDate")
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })

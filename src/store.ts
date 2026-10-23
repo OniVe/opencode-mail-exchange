@@ -530,17 +530,17 @@ export function openStore(config: MailConfig): Store | undefined {
       ? rest
           .toLowerCase()
           .split(/\s+/)
-          .map((token) => token.replace(/^["']+|["']+$/g, "").replace(/[.,;:!?]+$/g, ""))
+          .map((token) => token.replace(/^[("'[{]+|[)"'\]}.,;:!?]+$/g, ""))
           .filter(Boolean)
       : []
     const rows = db
       .query(`
         select m.*, b.body from messages m
         left join bodies b on b.message_id = m.id
-        where m.deleted = 0 and (m.subject like ? or m.preview like ? or b.body like ?)
+        where m.deleted = 0 and (m.subject like ? or m.from_addr like ? or m.preview like ? or b.body like ?)
         order by m.received_ts desc, m.id asc
       `)
-      .all(pattern, pattern, pattern) as Array<MessageRow & { body: string | null }>
+      .all(pattern, pattern, pattern, pattern) as Array<MessageRow & { body: string | null }>
     return rows
       .filter((row) => {
         const text = [row.subject, row.from_addr, row.preview, row.body ?? ""].join("\n")
@@ -557,8 +557,13 @@ export function openStore(config: MailConfig): Store | undefined {
           if (/^[\p{L}\p{N}]+$/u.test(needle)) {
             return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}`, "iu").test(lower)
           }
-          // Terms with internal punctuation are literal: "C++", "C#", "R&D", "O'Bri".
-          return lower.includes(needle)
+          // Mixed terms allow punctuation variants: "R&D" ↔ "R & D", "C++" ↔ "C + +".
+          let pattern = ""
+          for (const char of needle) {
+            if (/[\p{L}\p{N}]/u.test(char)) pattern += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+            else pattern += `[^\\p{L}\\p{N}]*${char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^\\p{L}\\p{N}]*`
+          }
+          return new RegExp(pattern, "iu").test(lower)
         })
       })
       .slice(0, take)
