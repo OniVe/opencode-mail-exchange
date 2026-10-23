@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write # create the GitHub release and tag
+  issues: write # comment on released issues
+  pull-requests: write # comment on released pull requests
+  id-token: write # OIDC for npm trusted publishing and provenance
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run lint
+      - run: bun test
+      - run: npx semantic-release
+        env:
+          # A PAT, not GITHUB_TOKEN: semantic-release pushes release metadata to
+          # refs/notes/*, which the Actions app token is not allowed to write.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
