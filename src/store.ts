@@ -107,11 +107,13 @@ const ftsQueries = (query: string): { primary: string; fallback?: string } | und
     }
     // Dates and email addresses are often typed partially: "202-10" and
     // "j.doe@example.com" must still match "2026-10-23" / "john.doe@...".
-    // Dotted words ("v1.2", "j.doe") get a prefix fallback only; their primary
-    // phrase stays exact so "v1.2" does not match "v1 200".
+    // Dotted words ("v1.2", "j.doe") get a prefix fallback only when the tail is
+    // informative (>=2 chars); initials ("R.D", "e.g.") stay exact so they do not
+    // fuzzy-match "Report data" / "every good thing".
     const allNumeric = tokens.every((token) => /^\d+$/.test(token))
-    const primaryPrefixAll = fragment.includes("@") || allNumeric
-    const fallbackPrefixAll = primaryPrefixAll || fragment.includes(".")
+    const lastToken = tokens[tokens.length - 1] ?? ""
+    const primaryPrefixAll = fragment.includes("@") || (allNumeric && tokens.length >= 3)
+    const fallbackPrefixAll = primaryPrefixAll || allNumeric || (fragment.includes(".") && lastToken.length >= 2)
     if (joinNext && groups.length > 0) {
       const last = groups[groups.length - 1]
       last.tokens.push(...tokens)

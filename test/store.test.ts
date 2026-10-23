@@ -406,6 +406,26 @@ describe("store", () => {
     rmSync(config.dataDir, { recursive: true, force: true })
   })
 
+  test("dotted initials do not fuzzy-match and numeric versions stay exact", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      message("report", "Report data", "2026-10-20T09:00:00Z"),
+      message("jdot", "J.D. notes", "2026-10-19T09:00:00Z"),
+      message("johndoe", "John Doe", "2026-10-18T09:00:00Z"),
+      message("numeric", "1.2 release", "2026-10-16T09:00:00Z"),
+      message("numnoise", "1 200 units", "2026-10-24T09:00:00Z"),
+    ])
+    expect(store.search("R.D", 10)).toEqual([])
+    expect(store.search("J.D.", 10).map((item) => item.id)).toEqual(["jdot"])
+    expect(store.search("j.doe", 10).map((item) => item.id)).toEqual(["johndoe"])
+    expect(store.search("1.2", 1).map((item) => item.id)).toEqual(["numeric"])
+    expect(store.search("1.2", 10).map((item) => item.id)).toEqual(["numeric"])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
   test("dotted versions stay exact in the primary pass", () => {
     const config = baseConfig()
     const store = openStore(config)
