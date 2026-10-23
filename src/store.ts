@@ -388,6 +388,37 @@ const ftsQueries = (query: string): { primary: string; fallback?: string } | und
   }
 }
 
+/** Linear token comparison for mixed terms: "C++" ↔ "C + +", "R&D" ↔ "R & D". */
+const matchesMixedNeedle = (text: string, needle: string): boolean => {
+  if (/\d/.test(needle)) return text.includes(needle)
+  const needleTokens = needle.split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+  if (needleTokens.length === 0) return text.includes(needle)
+  // A single-token symbolic term must keep its symbol: C# ≠ C++ ≠ carbon.
+  if (needleTokens.length === 1) {
+    const punctuation = needle.replace(/[\p{L}\p{N}]/gu, "")
+    if (punctuation && !text.includes(punctuation[0] ?? "")) return false
+  }
+  const textTokens = text.split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+  for (let i = 0; i + needleTokens.length <= textTokens.length; i++) {
+    let matches = true
+    for (let j = 0; j < needleTokens.length; j++) {
+      const wanted = needleTokens[j]
+      const actual = textTokens[i + j]
+      if (j === needleTokens.length - 1 && needleTokens.length > 1) {
+        if (!actual?.startsWith(wanted)) {
+          matches = false
+          break
+        }
+      } else if (actual !== wanted) {
+        matches = false
+        break
+      }
+    }
+    if (matches) return true
+  }
+  return false
+}
+
 const splitAddresses = (value: string | null | undefined): string[] =>
   value
     ? value
@@ -574,14 +605,8 @@ export function openStore(config: MailConfig): Store | undefined {
           if (/^[\p{L}\p{N}]+$/u.test(needle)) {
             return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}`, "iu").test(lower)
           }
-          // Mixed terms allow punctuation variants: "R&D" ↔ "R & D", "C++" ↔ "C + +".
-          let pattern = ""
-          for (const char of needle) {
-            if (/[\p{L}\p{N}]/u.test(char)) pattern += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-            else pattern += `[^\\p{L}\\p{N}]{0,4}${char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^\\p{L}\\p{N}]{0,4}`
-          }
-          const prefix = /^\d/.test(needle) ? "(^|[^0-9])" : /^[\p{L}\p{N}]/u.test(needle) ? "(^|[^\\p{L}\\p{N}])" : ""
-          return new RegExp(`${prefix}${pattern}`, "iu").test(lower)
+          // Mixed terms are compared as token sequences: linear, no regex backtracking.
+          return matchesMixedNeedle(lower, needle)
         })
       })
       .slice(0, take)
