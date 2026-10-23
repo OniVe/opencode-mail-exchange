@@ -591,6 +591,7 @@ describe("store", () => {
     expect(store.search("2026-10-23 O'Bri", 10).map((item) => item.id)).toEqual(["obrien"])
     expect(store.search("2026-10-23 report,", 30).map((item) => item.id)).toContain("quote")
     expect(store.search("2026-10-23 10:00 report", 10).map((item) => item.id)).toEqual(["rT10"])
+    expect(store.search("2026-10-23 10 report", 10).map((item) => item.id)).toEqual(["rT10"])
     expect(store.search("2026-10-23 (report)", 30).map((item) => item.id)).toContain("quote")
     expect(store.search("2026-10-23 report.", 30).map((item) => item.id)).toContain("quote")
     expect(store.search("2026-10-23 R&D", 10).map((item) => item.id)).toEqual(["rdSpaced", "rd"])
@@ -637,9 +638,18 @@ describe("store", () => {
     store.upsertMessages("wk:inbox", [
       message("h10", "2026-10-23T10:00 report", "2026-10-10T09:00:00Z"),
       message("h03", "2026-10-23T03:10 report", "2026-10-11T09:00:00Z"),
+      message("h09", "2026-10-23T09:00 report", "2026-10-12T09:00:00Z"),
+      message("sp09", "2026-10-23 9:00 report", "2026-10-13T09:00:00Z"),
       message("price", "2026-10-23 price 10 usd", "2026-10-12T09:00:00Z"),
     ])
     expect(store.search("2026-10-23 10", 10).map((item) => item.id)).toEqual(["h10"])
+    // A single-digit hour followed by text also filters by hour (09 vs 9).
+    expect(
+      store
+        .search("2026-10-23 9 report", 10)
+        .map((item) => item.id)
+        .sort(),
+    ).toEqual(["h09", "sp09"])
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
@@ -654,6 +664,59 @@ describe("store", () => {
     ])
     expect(store.search("2026-10-23", 10)).toEqual([])
     expect(store.search("2026-10-23T10:00", 10)).toEqual([])
+    // The whitespace form validates seconds too: parity with the compact form.
+    expect(store.search("2026-10-23 10:00:60", 10)).toEqual([])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
+  test("seconds are compared in both forms", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      message("s15", "2026-10-23T10:00:15", "2026-10-10T09:00:00Z"),
+      message("s30", "2026-10-23 10:00:30", "2026-10-11T09:00:00Z"),
+      message("plain", "2026-10-23T10:00", "2026-10-12T09:00:00Z"),
+    ])
+    expect(store.search("2026-10-23T10:00:15", 10).map((item) => item.id)).toEqual(["s15"])
+    expect(store.search("2026-10-23 10:00:15", 10).map((item) => item.id)).toEqual(["s15"])
+    expect(
+      store
+        .search("2026-10-23 10:00", 10)
+        .map((item) => item.id)
+        .sort(),
+    ).toEqual(["plain", "s15", "s30"])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
+  test("mixed terms keep their symbols adjacent", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      message("cpp", "2026-10-23 C++ notes", "2026-10-10T09:00:00Z"),
+      message("cppSpaced", "2026-10-23 C + + notes", "2026-10-11T09:00:00Z"),
+      message("cpp11", "2026-10-23 C++11 notes", "2026-10-12T09:00:00Z"),
+      message("cpp11Spaced", "2026-10-23 C + + 11 notes", "2026-10-13T09:00:00Z"),
+      message("csharpPlus", "2026-10-23 C# + notes", "2026-10-14T09:00:00Z"),
+      message("cplusD", "2026-10-23 C + D notes", "2026-10-15T09:00:00Z"),
+      message("rd", "2026-10-23 R&D roadmap", "2026-10-16T09:00:00Z"),
+      message("rdSpaced", "2026-10-23 R & D roadmap", "2026-10-17T09:00:00Z"),
+      message("rdPlain", "2026-10-23 R D roadmap", "2026-10-18T09:00:00Z"),
+      message("email", "2026-10-23 e-mail support", "2026-10-19T09:00:00Z"),
+      message("emailSpaced", "2026-10-23 e mailserver", "2026-10-20T09:00:00Z"),
+    ])
+    const ids = (query: string): string[] =>
+      store
+        .search(query, 20)
+        .map((item) => item.id)
+        .sort()
+    expect(ids("2026-10-23 C++")).toEqual(["cpp", "cpp11", "cpp11Spaced", "cppSpaced"])
+    expect(ids("2026-10-23 C++11")).toEqual(["cpp11", "cpp11Spaced"])
+    expect(ids("2026-10-23 R&D")).toEqual(["rd", "rdSpaced"])
+    expect(ids("2026-10-23 e-mail")).toEqual(["email"])
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
@@ -663,7 +726,7 @@ describe("store", () => {
     const store = openStore(config)
     if (!store) throw new Error("store expected")
     store.upsertMessages("wk:inbox", [message("p", "2026-10-23", "2026-10-10T09:00:00Z")])
-    expect(() => store.search(`2026-10-23 ${"!".repeat(30000)}`, 5)).not.toThrow()
+    expect(store.search(`2026-10-23 ${"!".repeat(30000)}`, 5)).toEqual([])
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })

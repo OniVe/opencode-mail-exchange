@@ -92,6 +92,7 @@ interface DateTimeParts {
   day: string
   hour?: string
   minute?: string
+  second?: string
   hminute?: string
   zone?: "Z" | "offset"
   offset?: string
@@ -122,7 +123,7 @@ const parseDateTime = (value: string): DateTimeParts | undefined => {
   const zoneRaw = match[8]
   const zone = zoneRaw === undefined ? undefined : /^[Zz]$/.test(zoneRaw) ? "Z" : "offset"
   const offset = zone === "offset" ? zoneRaw.replace(":", "") : undefined
-  return { year: match[1], month: match[2], day: match[3], hour, minute, hminute, zone, offset, mode }
+  return { year: match[1], month: match[2], day: match[3], hour, minute, second: seconds, hminute, zone, offset, mode }
 }
 
 /** Date-only or date-time query, including the whitespace form "2026 10 23". */
@@ -147,22 +148,27 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string } 
       ) {
         const hour = timeRest[1]
         const minute = timeRest[2]
+        const seconds = timeRest[3]
         const hminute = timeRest[4]
         if (Number(hour) > 23 || (minute !== undefined && Number(minute) > 59)) return undefined
+        if (seconds !== undefined && Number(seconds) > 59) return undefined
         if (hminute !== undefined && Number(hminute) > 59) return undefined
         return {
           date: {
             ...date,
             hour,
             minute,
+            second: seconds,
             hminute,
             mode: hminute !== undefined ? "hourH" : "hour",
           },
           text: timeRest[5]?.trim() || undefined,
         }
       }
+      // A single or double-digit hour followed by text is still a time filter:
+      // "2026-10-23 9 report" and "2026-10-23 10 report" both work.
       const leadingHour = /^(\d{1,2})(?:\s+(.*))?$/.exec(rest ?? "")
-      if (leadingHour && leadingHour[1].length === 2 && Number(leadingHour[1]) <= 23) {
+      if (leadingHour && Number(leadingHour[1]) <= 23) {
         return {
           date: { ...date, hour: leadingHour[1], mode: "hour" },
           text: leadingHour[2]?.trim() || undefined,
@@ -193,6 +199,7 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string } 
 interface ParsedTime {
   hour?: string
   minute?: string
+  second?: string
   hminute?: string
   zone?: "Z" | "offset"
   offset?: string
@@ -222,7 +229,7 @@ const parseTimeSuffix = (rest: string): ParsedTime | undefined => {
   const zoneRaw = match[6]
   const zone = zoneRaw === undefined ? undefined : /^[Zz]$/.test(zoneRaw) ? "Z" : "offset"
   const offset = zone === "offset" ? zoneRaw.replace(":", "") : undefined
-  return { hour: match[1], minute, hminute, zone, offset }
+  return { hour: match[1], minute, second: seconds, hminute, zone, offset }
 }
 
 const DATE_TEXT = /(?<!\d)(\d{4})[-/. ](\d{1,2})[-/. ](\d{1,2})(?!\d)/g
@@ -276,6 +283,10 @@ const matchesDateText = (text: string, query: DateTimeParts): boolean => {
       query.minute !== undefined &&
       (time.minute ?? time.hminute ?? (time.hour !== undefined ? "00" : undefined)) !== query.minute
     ) {
+      match = DATE_TEXT.exec(text)
+      continue
+    }
+    if (query.second !== undefined && (time.second ?? "00") !== query.second) {
       match = DATE_TEXT.exec(text)
       continue
     }
@@ -406,35 +417,92 @@ const ftsQueries = (query: string): { primary: string; fallback?: string } | und
   }
 }
 
-/** Linear token comparison for mixed terms: "C++" ↔ "C + +", "R&D" ↔ "R & D". */
-const matchesMixedNeedle = (text: string, needle: string): boolean => {
-  if (/\d/.test(needle)) return text.includes(needle)
-  const needleTokens = needle.split(/[^\p{L}\p{N}]+/u).filter(Boolean)
-  if (needleTokens.length === 0) return text.includes(needle)
-  // A single-token symbolic term must keep its symbol: C# ≠ C++ ≠ carbon.
-  if (needleTokens.length === 1) {
-    const punctuation = needle.replace(/[\p{L}\p{N}]/gu, "")
-    if (punctuation && !text.includes(punctuation[0] ?? "")) return false
+interface MixedPart {
+  token?: string
+  punct?: string
+}
+
+const splitMixedNeedle = (needle: string): MixedPart[] => {
+  const parts: MixedPart[] = []
+  let current = ""
+  let currentIsToken = false
+  for (const char of needle) {
+    const isToken = /[\p{L}\p{N}]/u.test(char)
+    if (current === "") {
+      current = char
+      currentIsToken = isToken
+      continue
+    }
+    if (isToken === currentIsToken) {
+      current += char
+    } else {
+      parts.push(currentIsToken ? { token: current } : { punct: current })
+      current = char
+      currentIsToken = isToken
+    }
   }
-  const textTokens = text.split(/[^\p{L}\p{N}]+/u).filter(Boolean)
-  for (let i = 0; i + needleTokens.length <= textTokens.length; i++) {
-    let matches = true
-    for (let j = 0; j < needleTokens.length; j++) {
-      const wanted = needleTokens[j]
-      const actual = textTokens[i + j]
-      if (j === needleTokens.length - 1 && needleTokens.length > 1) {
-        if (!actual?.startsWith(wanted)) {
+  if (current !== "") parts.push(currentIsToken ? { token: current } : { punct: current })
+  return parts
+}
+
+/**
+ * Linear comparison for mixed terms ("C++" ↔ "C + +", "R&D" ↔ "R & D").
+ * The text is split once into word tokens and the separators between them, so
+ * each punctuation character of the needle must occur in the separator before
+ * the next token. "C++" therefore cannot match "C# +" or "C + D".
+ */
+const matchesMixedNeedle = (text: string, needle: string): boolean => {
+  const parts = splitMixedNeedle(needle)
+  if (parts.length === 0) return text.includes(needle)
+  const chunks = text.split(/([^\p{L}\p{N}]+)/u)
+  const tokens = chunks.filter((_, index) => index % 2 === 0)
+  const separators = chunks.filter((_, index) => index % 2 === 1)
+
+  const tokenMatches = (actual: string | undefined, part: MixedPart, last: boolean): boolean => {
+    if (actual === undefined || part.token === undefined) return false
+    if (last && /^\p{L}+$/u.test(part.token)) return actual.startsWith(part.token)
+    return actual === part.token
+  }
+
+  const containsInOrder = (separator: string, symbols: string): boolean => {
+    let at = 0
+    for (const symbol of symbols) {
+      const found = separator.indexOf(symbol, at)
+      if (found === -1) return false
+      at = found + 1
+    }
+    return true
+  }
+
+  if (parts[0].token !== undefined) {
+    for (let start = 0; start < tokens.length; start++) {
+      if (!tokenMatches(tokens[start], parts[0], parts.length === 1)) continue
+      let tokenIndex = start
+      let matches = true
+      for (let p = 1; p < parts.length; p++) {
+        const part = parts[p]
+        if (part.punct !== undefined) {
+          if (!containsInOrder(separators[tokenIndex] ?? "", part.punct)) {
+            matches = false
+            break
+          }
+          continue
+        }
+        tokenIndex += 1
+        if (!tokenMatches(tokens[tokenIndex], part, p === parts.length - 1)) {
           matches = false
           break
         }
-      } else if (actual !== wanted) {
-        matches = false
-        break
       }
+      if (matches) return true
     }
-    if (matches) return true
+    return false
   }
-  return false
+
+  // Punctuation-only terms ("***", "..."): the symbols must occur in order in one separator.
+  if (parts.length !== 1) return false
+  const symbols = parts[0].punct ?? ""
+  return separators.some((separator) => containsInOrder(separator, symbols))
 }
 
 const splitAddresses = (value: string | null | undefined): string[] =>
