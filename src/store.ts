@@ -323,11 +323,11 @@ const matchesDateText = (text: string, query: DateTimeParts): boolean => {
         continue
       }
       // A date followed by whitespace is a hit: "2026-10-23 10:00", "2026-10-23 5 items".
-      // A colon-time tail must still be valid: "2026-10-23 10:00::0" is not 10:00.
-      // Dots stay out of this check: "1.2" is a number, not a broken time.
+      // A numeric punctuation-only clock token must still parse: "10:00::0" is not
+      // 10:00, while "10:00am"/"10:00UTC"/"1.2" are left alone.
       if (/^\s/.test(rest)) {
-        const trimmed = rest.trimStart()
-        if (/^\d{1,2}:\d{2}/.test(trimmed) && !parseTimeSuffix(rest)) {
+        const token = rest.trimStart().split(/\s/, 1)[0] ?? ""
+        if (/^\d{1,2}:/.test(token) && /^[0-9:.]+$/.test(token) && !parseTimeSuffix(` ${token}`)) {
           match = DATE_TEXT.exec(text)
           continue
         }

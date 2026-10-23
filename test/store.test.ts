@@ -766,6 +766,7 @@ describe("store", () => {
       message("spaceDbl", "2026-10-23 10:00::0 doc", "2026-10-16T09:00:00Z"),
       message("spaceColonDot", "2026-10-23 10:00:.5 doc", "2026-10-17T09:00:00Z"),
       message("spaceShort", "2026-10-23 10:00:0 doc", "2026-10-18T09:00:00Z"),
+      message("spaceShortMin", "2026-10-23 10:0 note", "2026-10-19T09:00:00Z"),
     ])
     expect(store.search("2026-10-23", 10)).toEqual([])
     for (const query of [
@@ -779,6 +780,7 @@ describe("store", () => {
       "2026-10-23 10:00::0",
       "2026-10-23 10:00:.5",
       "2026-10-23 10:00:0",
+      "2026-10-23 10:0",
     ]) {
       expect(store.search(query, 10)).toEqual([])
     }
@@ -798,20 +800,39 @@ describe("store", () => {
       message("colonNum", "2026-10-23T10:00: 10 attendees", "2026-10-14T09:00:00Z"),
       message("dotYear", "2026-10-23T10:00. 2027 budget", "2026-10-15T09:00:00Z"),
       message("spaceDotNum", "2026-10-23 10:00. 42 items", "2026-10-16T09:00:00Z"),
+      message("nl", "2026-10-23\n10:00 agenda", "2026-10-17T09:00:00Z"),
+      message("tab", "2026-10-23\t10:00 agenda", "2026-10-18T09:00:00Z"),
+      message("twoSpaces", "2026-10-23  10:00 agenda", "2026-10-19T09:00:00Z"),
+      message("malformedNl", "2026-10-23\n10:00::0 agenda", "2026-10-20T09:00:00Z"),
+      message("ampm", "2026-10-23 10:00am agenda", "2026-10-21T09:00:00Z"),
+      message("utc", "2026-10-23 10:00UTC agenda", "2026-10-22T09:00:00Z"),
     ])
-    const expected = ["colonNum", "colonText", "dotEnd", "dotNum", "dotYear", "plain", "spaceDotNum"]
+    const expected = [
+      "ampm",
+      "colonNum",
+      "colonText",
+      "dotEnd",
+      "dotNum",
+      "dotYear",
+      "nl",
+      "plain",
+      "spaceDotNum",
+      "tab",
+      "twoSpaces",
+      "utc",
+    ]
     expect(
       store
-        .search("2026-10-23", 20)
+        .search("2026-10-23", 30)
         .map((item) => item.id)
         .sort(),
     ).toEqual(expected)
     expect(
       store
-        .search("2026-10-23T10:00", 20)
+        .search("2026-10-23T10:00", 30)
         .map((item) => item.id)
         .sort(),
-    ).toEqual(expected)
+    ).toEqual(expected.filter((id) => !["nl", "tab", "twoSpaces", "ampm", "utc"].includes(id)))
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
@@ -921,7 +942,7 @@ describe("store", () => {
     const elapsed = performance.now() - started
     expect(found).toHaveLength(20)
     // Catches order-of-magnitude regressions without depending on CI jitter.
-    expect(elapsed).toBeLessThan(20)
+    expect(elapsed).toBeLessThan(5)
     // A sparse date still has to scan, but must stay in the same ballpark.
     const sparseStarted = performance.now()
     expect(store.search("2026-12-31", 20)).toHaveLength(0)
