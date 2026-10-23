@@ -62,6 +62,15 @@ const pathKey = (value: string): string => {
   return path.resolve(normalizeWin32Path(value)).toLowerCase()
 }
 
+/** bun:sqlite resolves these namespaces unpredictably; reject them before a store is opened. */
+const assertDataDirSupported = (value: string): void => {
+  if (process.platform === "win32" && (EXTENDED_WIN32_PATH.test(value) || DEVICE_WIN32_PATH.test(value))) {
+    throw new ConfigError(
+      "dataDir must be a normal path; extended-length (\\\\?\\\\) and device (\\\\.\\\\) paths are not supported",
+    )
+  }
+}
+
 const asString = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim() !== "" ? value.trim() : undefined
 
@@ -123,6 +132,7 @@ export function resolveAccounts(options: unknown, env: NodeJS.ProcessEnv = proce
   const raw = Array.isArray(opts.accounts) ? opts.accounts : []
   const entries = raw.length > 0 ? raw.map((entry) => (entry ?? {}) as Record<string, unknown>) : [opts]
   const root = asString(opts.dataDir) ?? asString(env.MAIL_DATA_DIR)
+  if (root) assertDataDirSupported(root)
   const listProvided = raw.length > 0
   const seen = new Set<string>()
   const dirs = new Map<string, string>()
@@ -149,6 +159,7 @@ export function resolveAccounts(options: unknown, env: NodeJS.ProcessEnv = proce
           ? path.join(root ?? defaultDataDir(config.username), id)
           : config.dataDir,
     )
+    assertDataDirSupported(dataDir)
 
     // Windows paths are case-insensitive: `Mail` and `mail` hit the same directory.
     const dirKey = pathKey(dataDir)
@@ -190,13 +201,9 @@ export function resolveConfig(options: unknown, env: NodeJS.ProcessEnv = process
   if (caFile && !existsSync(caFile)) throw new ConfigError(`caFile does not exist: ${caFile}`)
 
   const dataDir = asString(opts.dataDir) ?? asString(env.MAIL_DATA_DIR) ?? defaultDataDir(username)
-  if (process.platform === "win32" && (EXTENDED_WIN32_PATH.test(dataDir) || DEVICE_WIN32_PATH.test(dataDir))) {
-    // bun:sqlite resolves these namespaces unpredictably (trailing dots are dropped,
-    // `\\.\C:\dir` aliases `C:\dir`), so an account could silently share another index.
-    throw new ConfigError(
-      "dataDir must be a normal path; extended-length (\\\\?\\\\) and device (\\\\.\\\\) paths are not supported",
-    )
-  }
+  // bun:sqlite resolves these namespaces unpredictably (trailing dots are dropped,
+  // `\\.\C:\dir` aliases `C:\dir`), so an account could silently share another index.
+  assertDataDirSupported(dataDir)
 
   return {
     id,

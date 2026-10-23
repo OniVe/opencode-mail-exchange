@@ -128,9 +128,10 @@ const ftsQueries = (query: string): { primary: string; fallback?: string } | und
       continue
     }
     if (group.prefixAll) {
-      // Exact date/email first; a partially typed prefix is a second pass, so a
-      // newer message with the same numbers cannot displace the exact match.
-      primary.push(`"${group.tokens.join(" ")}"`)
+      // Phrase first, with a prefix on the last token: `2026-10-23` also matches
+      // `2026-10-23T10:00` (token `23t10`). A fully partial date (`202-10`) still
+      // needs the all-prefix second pass.
+      primary.push(`"${group.tokens.join(" ")}"*`)
       fallback.push(group.tokens.map((token) => `"${token}"*`).join(" AND "))
       needsFallback = true
       continue

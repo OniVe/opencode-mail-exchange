@@ -328,10 +328,10 @@ export class EwsBackend implements MailBackend {
     const local = this.store && this.store.count() > 0 ? this.store.search(input.query, input.limit) : []
 
     // The filter value lands in a SOAP text node: `R&D` breaks the request unless escaped.
-    const query = escapeXml(input.query)
+    const query = escapeXml(input.query.trim())
     // A query made only of whitespace/controls/non-characters cannot be sent: the SOAP
     // element would have no value (or a blank one). There is nothing to search for.
-    if (query.trim() === "") return this.withRecipients(local)
+    if (query === "") return this.withRecipients(local)
     let remote: MessageSummary[] = []
     try {
       const filter = new SearchFilter.SearchFilterCollection(LogicalOperator.Or, [

@@ -201,6 +201,19 @@ describe("resolveConfig", () => {
     }
   })
 
+  test("rejects an extended top-level dataDir even when an account overrides it", () => {
+    if (process.platform !== "win32") return
+    const base = {
+      dataDir: String.raw`\\?\C:\data\rt-mail`,
+      ewsUrl: "https://mail/EWS/Exchange.asmx",
+      password: "p",
+      username: "D\\a",
+    }
+    for (const override of ["", null, "   ", 0]) {
+      expect(() => resolveAccounts({ ...base, accounts: [{ id: "a", dataDir: override }] }, {})).toThrow(ConfigError)
+    }
+  })
+
   test("resolves MAIL_PASSWORD_<ID> for auto-generated account ids", () => {
     const accounts = resolveAccounts(
       {
@@ -375,6 +388,20 @@ describe("store", () => {
     expect(store.search("2026-10-23", 3).map((item) => item.id)).toEqual(["date-true"])
     // A partial date falls back to prefixes and may match both; the exact date must be present.
     expect(store.search("202-10", 10).map((item) => item.id)).toContain("date-true")
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
+  test("an ISO timestamp matches the date phrase", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      message("exact", "2026-10-23 report", "2026-10-16T09:00:00Z"),
+      message("iso", "2026-10-23T10:00 meeting", "2026-10-24T09:00:00Z"),
+    ])
+    expect(store.search("2026-10-23", 10).map((item) => item.id)).toEqual(["iso", "exact"])
+    expect(store.search("2026-10-23", 1).map((item) => item.id)).toEqual(["iso"])
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })

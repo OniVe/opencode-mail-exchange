@@ -186,8 +186,8 @@ by the EWS half. Expect one EWS `FindItems` call (~0.5 s), one `LoadPropertiesFo
 non-empty page, and one `BindToItems` when the result contains messages with unknown recipients.
 
 Local FTS treats punctuation inside a word as a token boundary and keeps the parts adjacent (`R&D` and
-`R & D` both match `R D`). Numeric fragments and email addresses are matched with prefixes (`202-10` matches
-`2026-10-23`).
+`R & D` both match `R D`). Numeric fragments and email addresses are matched as phrase prefixes first, with an
+all-token prefix fallback (`202-10` matches `2026-10-23`).
 
 Runtime note: tool names, `codemode` visibility and permission enforcement are defined by `@opencode/plugin`
 (2.0.26). Live verification in a running OpenCode session is tracked as R5 in
@@ -226,10 +226,10 @@ SQLite (`bun:sqlite`, WAL, FTS5) under `dataDir`; with `accounts`, `<dataDir>/<i
 - `metadata` — headers, preview, FTS; bodies on demand.
 - `full` — plus body cache, up to `maxBodyBytes`.
 
-The default location is outside the project. `dataDir` is not restricted: if you point it into a repository,
+The default location is outside the project. It is not restricted by location: if you point it into a repository,
 the index (plaintext) will land there. Keep it outside; `.gitignore` covers `mail.db*` and `*.sqlite*`, but does
-not enforce it. Use BitLocker/EFS if disk encryption is required. Encryption is planned in
-[docs/roadmap.md](docs/roadmap.md) (R1).
+not enforce it. Extended-length and device namespaces are rejected (see Configuration). Use BitLocker/EFS if disk
+encryption is required. Encryption is planned in [docs/roadmap.md](docs/roadmap.md) (R1).
 
 ## Limits
 

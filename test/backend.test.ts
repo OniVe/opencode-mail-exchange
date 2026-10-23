@@ -161,6 +161,26 @@ describe("search serialization", () => {
     rmSync(cfg.dataDir, { recursive: true, force: true })
   })
 
+  test("trims leading and trailing whitespace before the EWS query", async () => {
+    const cfg = config()
+    const backend = new EwsBackend(cfg, openStore(cfg))
+    let captured: { searchFilters?: Array<{ Value?: string }> } | undefined
+    ;(backend as unknown as { service: unknown }).service = {
+      FindItems: async (_folder: unknown, filter: { searchFilters?: Array<{ Value?: string }> }) => {
+        captured = filter
+        return { Items: [] }
+      },
+      LoadPropertiesForItems: async () => {},
+    }
+
+    expect(await backend.searchMessages({ query: "  R&D  ", limit: 5 })).toEqual([])
+    const values = (captured?.searchFilters ?? []).map((filter) => filter.Value)
+    expect(values).toEqual(["R&amp;D", "R&amp;D"])
+
+    backend.close()
+    rmSync(cfg.dataDir, { recursive: true, force: true })
+  })
+
   test("does not call EWS when the query is empty after XML sanitization", async () => {
     const cfg = config()
     const backend = new EwsBackend(cfg, openStore(cfg))
