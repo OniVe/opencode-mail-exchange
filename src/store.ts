@@ -196,25 +196,34 @@ const stripTimeSuffixes = (value: string): string => {
 
 /** Date-only or date-time query, including the whitespace form "2026 10 23". */
 const parseSearchDate = (query: string): { date: DateTimeParts; text?: string; invalid?: boolean } | undefined => {
-  const compact = parseDateTime(query.trim())
+  // Sentence punctuation after a valid time is not a text query: "10:00:30,".
+  // Other trailing punctuation is left alone ("... report.").
+  const trimmedQuery = query.trim()
+  const sentenceTrimmed = trimmedQuery.replace(/[.,;!?]+$/, "")
+  const normalized = /(?:[Tt]|\s)\d{1,2}(?::\d{2}(?::\d{2}(?:\.\d+)?)?|[Hh]\d{2})(?:[Zz]|[+-]\d{2}:?\d{2})?$/.test(
+    sentenceTrimmed,
+  )
+    ? sentenceTrimmed
+    : trimmedQuery
+  const compact = parseDateTime(normalized)
   if (compact) return { date: compact }
   // A malformed time component ("T10:0", "T10:00:0", "T24:00.500") is not a date-time,
   // but only when it is the whole query: date+text may contain such a literal. Trailing
   // punctuation and a zone/offset are stripped in any order ("10:00:0,Z"), and a
   // one-digit hour with a one-digit minute is a ratio ("1:2"), not a broken time.
-  const malformedProbe = stripTimeSuffixes(query.trim())
+  const malformedProbe = stripTimeSuffixes(normalized)
   const malformedTime =
     /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:[Tt]|\s+)(?:\d{2}:\d(?!\d)(?:[.:]\d*)?|\d{1,2}:\d{2}::[0-9.]*|\d{1,2}:\d{2}:\.\d*|\d{1,2}:\d{2}\.\d+|\d{1,2}:\d{2}:\d(?!\d)(?:\.\d+)?)(?:[Zz]|[+-]\d{2}:?\d{2})?$/.test(
       malformedProbe,
     )
   if (malformedTime) {
-    const base = /^(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})/.exec(query.trim())?.[1]
+    const base = /^(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})/.exec(normalized)?.[1]
     const baseDate = base ? parseDateTime(base) : undefined
     if (baseDate) return { date: baseDate, invalid: true }
   }
   const compactPrefix =
     /^(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:[Tt]\d{1,2}(?::\d{2}(?::\d{2}(?:\.[0-9]+)?)?|[Hh]\d{2})?(?:[Zz]|[+-]\d{2}:?\d{2})?)?)(?:\s+(.*))?$/.exec(
-      query.trim(),
+      normalized,
     )
   if (compactPrefix) {
     const date = parseDateTime(compactPrefix[1])
@@ -280,7 +289,7 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string; i
     }
     return { date, text: rest || undefined }
   }
-  const spaced = /^(\d{4})\s+(\d{1,2})\s+(\d{1,2})(?:\s+[Tt]?(\d{1,2})(?::(\d{2}))?)?(?:\s+(.*))?$/.exec(query.trim())
+  const spaced = /^(\d{4})\s+(\d{1,2})\s+(\d{1,2})(?:\s+[Tt]?(\d{1,2})(?::(\d{2}))?)?(?:\s+(.*))?$/.exec(normalized)
   if (!spaced) return undefined
   const hour = spaced[4]
   if (hour !== undefined && !isAllowedHour(Number(hour), spaced[5])) return undefined

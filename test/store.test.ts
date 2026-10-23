@@ -899,6 +899,10 @@ describe("store", () => {
     ])
     expect(store.search("2026-10-23T10:00:15", 10).map((item) => item.id)).toEqual(["s15"])
     expect(store.search("2026-10-23 10:00:15", 10).map((item) => item.id)).toEqual(["s15"])
+    // Sentence punctuation after a valid time is not a text query.
+    expect(store.search("2026-10-23 10:00:30,", 10).map((item) => item.id)).toEqual(["s30"])
+    expect(store.search("2026-10-23 10:00:30.", 10).map((item) => item.id)).toEqual(["s30"])
+    expect(store.search("2026-10-23T10:00:15,", 10).map((item) => item.id)).toEqual(["s15"])
     expect(
       store
         .search("2026-10-23 10:00", 10)
@@ -951,26 +955,34 @@ describe("store", () => {
       ),
     }))
     store.upsertMessages("wk:inbox", rows)
-    const started = performance.now()
+    const timeOf = (action: () => void): number => {
+      const started = performance.now()
+      action()
+      return performance.now() - started
+    }
+    const denseStarted = performance.now()
     const found = store.search("2026-10-23", 20)
-    const elapsed = performance.now() - started
+    const denseMs = performance.now() - denseStarted
     expect(found).toHaveLength(20)
-    // Catches order-of-magnitude regressions without depending on CI jitter.
-    expect(elapsed).toBeLessThan(5)
-    // A sparse date still has to scan, but must stay in the same ballpark.
     const sparseStarted = performance.now()
     expect(store.search("2026-12-31", 20)).toHaveLength(0)
-    expect(performance.now() - sparseStarted).toBeLessThan(50)
-    // A hostile suffix tail must not make normalization quadratic (M75/M76).
-    // 64 KB and date-matching: the defective revision takes seconds here.
-    const poison = `2026-10-23 x${",Z".repeat(32000)}`
-    store.upsertMessages("wk:inbox", [{ ...message("poisoned", poison, "2026-12-31T09:00:00Z") }])
-    const poisonScanStarted = performance.now()
-    expect(store.search("2026-10-23", 20)).toHaveLength(20)
-    expect(performance.now() - poisonScanStarted).toBeLessThan(100)
-    const poisonQueryStarted = performance.now()
-    store.search(poison, 20)
-    expect(performance.now() - poisonQueryStarted).toBeLessThan(100)
+    const sparseMs = performance.now() - sparseStarted
+    // Early exit must not be slower than a full scan; absolute CI speed cancels out.
+    expect(denseMs).toBeLessThanOrEqual(sparseMs + 5)
+    // Normalization must stay linear: 64 KB costs at most a small multiple of 4 KB.
+    // On the quadratic revision this ratio is ~250x (6 s vs 25 ms).
+    const poison4 = `2026-10-23 x${",Z".repeat(2000)}`
+    const poison64 = `2026-10-23 x${",Z".repeat(32000)}`
+    store.upsertMessages("wk:inbox", [{ ...message("poison4", poison4, "2026-12-31T09:00:00Z") }])
+    const scan4 = timeOf(() => store.search("2026-10-23", 20))
+    const query4 = timeOf(() => store.search(poison4, 20))
+    store.upsertMessages("wk:inbox", [{ ...message("poison64", poison64, "2026-12-31T10:00:00Z") }])
+    const poisoned = store.search("2026-10-23", 20)
+    expect(poisoned[0]?.id).toBe("poison64")
+    const scan64 = timeOf(() => store.search("2026-10-23", 20))
+    const query64 = timeOf(() => store.search(poison64, 20))
+    expect(scan64).toBeLessThanOrEqual(scan4 * 8 + 50)
+    expect(query64).toBeLessThanOrEqual(query4 * 8 + 50)
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })
