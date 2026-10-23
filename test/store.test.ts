@@ -457,6 +457,21 @@ describe("store", () => {
     rmSync(config.dataDir, { recursive: true, force: true })
   })
 
+  test("a date does not match a longer numeric suffix", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      message("exact", "2026-10-23 report", "2026-10-16T09:00:00Z"),
+      message("iso", "2026-10-23T10:00 meeting", "2026-10-17T09:00:00Z"),
+      message("long-suffix", "units 2026 10 2345 total", "2026-10-24T09:00:00Z"),
+    ])
+    expect(store.search("2026-10-23", 10).map((item) => item.id)).toEqual(["iso", "exact"])
+    expect(store.search("2026-10-23", 1).map((item) => item.id)).toEqual(["iso"])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
   test("an ISO timestamp matches the date phrase", () => {
     const config = baseConfig()
     const store = openStore(config)

@@ -136,10 +136,16 @@ const ftsQueries = (query: string): { primary: string; fallback?: string } | und
       continue
     }
     if (group.primaryPrefixAll) {
-      // Phrase first, with a prefix on the last token: `2026-10-23` also matches
-      // `2026-10-23T10:00` (token `23t10`). A fully partial date (`202-10`) still
-      // needs the all-prefix second pass.
-      primary.push(`"${group.tokens.join(" ")}"*`)
+      // Dates need ISO support (`23t10`), but a bare last-token prefix also matches
+      // `2345`. For a 3-part numeric date use exact + ISO-prefix alternatives:
+      // "2026 10 23" OR "2026 10 23t"*. A fully partial date (`202-10`) still needs
+      // the all-prefix second pass.
+      if (group.tokens.length === 3 && group.tokens.every((token) => /^\d+$/.test(token))) {
+        const [year, month, day] = group.tokens
+        primary.push(`(("${year} ${month} ${day}") OR ("${year} ${month} ${day}t"*))`)
+      } else {
+        primary.push(`"${group.tokens.join(" ")}"*`)
+      }
       fallback.push(group.tokens.map((token) => `"${token}"*`).join(" AND "))
       needsFallback = true
       continue
