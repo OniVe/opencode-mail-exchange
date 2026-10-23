@@ -465,6 +465,8 @@ describe("store", () => {
       message("exact", "2026-10-23 report", "2026-10-16T09:00:00Z"),
       message("iso", "2026-10-23T10:00 meeting", "2026-10-17T09:00:00Z"),
       message("long-suffix", "units 2026 10 2345 total", "2026-10-24T09:00:00Z"),
+      message("txn", "order 2026-10-23TXN-9", "2026-10-25T09:00:00Z"),
+      message("text", "note 2026-10-23text", "2026-10-26T09:00:00Z"),
     ])
     expect(store.search("2026-10-23", 10).map((item) => item.id)).toEqual(["iso", "exact"])
     expect(store.search("2026-10-23", 1).map((item) => item.id)).toEqual(["iso"])

@@ -142,7 +142,10 @@ const ftsQueries = (query: string): { primary: string; fallback?: string } | und
       // the all-prefix second pass.
       if (group.tokens.length === 3 && group.tokens.every((token) => /^\d+$/.test(token))) {
         const [year, month, day] = group.tokens
-        primary.push(`(("${year} ${month} ${day}") OR ("${year} ${month} ${day}t"*))`)
+        // ISO hours are 00-23: only t0*/t1*/t2* can continue a date. A bare t* would
+        // also match "23TXN" / "23text".
+        const isoHours = ["t0", "t1", "t2"].map((hour) => `("${year} ${month} ${day}${hour}"*)`)
+        primary.push(`(("${year} ${month} ${day}") OR ${isoHours.join(" OR ")})`)
       } else {
         primary.push(`"${group.tokens.join(" ")}"*`)
       }
