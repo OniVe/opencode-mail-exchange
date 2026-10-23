@@ -180,8 +180,8 @@ Permissions: `mail.read` (read tools), `mail.draft`, `mail.send`.
 
 Search scope: every search merges local FTS (`inbox`, `sent`, `drafts`, `deleted`) with the EWS subject/body
 search in `Inbox`, deduplicating by id and returning the newest `limit` matches. Other folders are not covered
-by the EWS half. Expect one EWS `FindItems` call (~0.5 s), plus one `BindToItems` when the result contains
-messages with unknown recipients.
+by the EWS half. Expect one EWS `FindItems` call (~0.5 s), one `LoadPropertiesForItems` (GetItem) for a
+non-empty page, and one `BindToItems` when the result contains messages with unknown recipients.
 
 Runtime note: tool names, `codemode` visibility and permission enforcement are defined by `@opencode/plugin`
 (2.0.26). Live verification in a running OpenCode session is tracked as R5 in

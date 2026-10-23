@@ -137,6 +137,61 @@ describe("resolveConfig", () => {
     rmSync(root, { recursive: true, force: true })
   })
 
+  test("rejects a trailing-dot dataDir collision on win32", () => {
+    if (process.platform !== "win32") return
+    const root = mkdtempSync(path.join(tmpdir(), "mail-dup-dot-"))
+    expect(() =>
+      resolveAccounts(
+        {
+          ewsUrl: "https://mail/EWS/Exchange.asmx",
+          password: "p",
+          username: "D\\a",
+          accounts: [
+            { id: "a", dataDir: path.join(root, "shared") },
+            { id: "b", dataDir: path.join(root, "shared.") },
+          ],
+        },
+        {},
+      ),
+    ).toThrow(ConfigError)
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  test("rejects ids that collapse to the same win32 dataDir", () => {
+    if (process.platform !== "win32") return
+    const root = mkdtempSync(path.join(tmpdir(), "mail-dup-id-"))
+    expect(() =>
+      resolveAccounts(
+        {
+          dataDir: root,
+          ewsUrl: "https://mail/EWS/Exchange.asmx",
+          password: "p",
+          username: "D\\a",
+          accounts: [{ id: "a" }, { id: "a." }],
+        },
+        {},
+      ),
+    ).toThrow(ConfigError)
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  test("normalizes win32 trailing dots in dataDir", () => {
+    if (process.platform !== "win32") return
+    const root = mkdtempSync(path.join(tmpdir(), "mail-dot-"))
+    const accounts = resolveAccounts(
+      {
+        dataDir: path.join(root, "mail."),
+        ewsUrl: "https://mail/EWS/Exchange.asmx",
+        password: "p",
+        username: "D\\a",
+        accounts: [{ id: "a" }],
+      },
+      {},
+    )
+    expect(accounts[0]?.dataDir).toBe(path.join(root, "mail", "a"))
+    rmSync(root, { recursive: true, force: true })
+  })
+
   test("resolves MAIL_PASSWORD_<ID> for auto-generated account ids", () => {
     const accounts = resolveAccounts(
       {
@@ -245,6 +300,24 @@ describe("store", () => {
     expect(store.search("зебра", 10)[0]?.id).toBe("1")
     expect(store.getMessage("1")?.body).toBe("уникальное слово зебра")
 
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
+  test("searches apostrophes and every token, not just the first eight", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      message("apos", "O'Brien quarterly report", "2026-10-23T09:00:00Z"),
+      message("dont", "please don't panic", "2026-10-22T09:00:00Z"),
+      message("long", "alpha beta gamma delta epsilon zeta eta theta iota", "2026-10-21T09:00:00Z"),
+    ])
+    expect(store.search("O'Brien", 10).map((item) => item.id)).toEqual(["apos"])
+    expect(store.search("don't", 10).map((item) => item.id)).toEqual(["dont"])
+    expect(store.search("alpha beta gamma delta epsilon zeta eta theta iota", 10).map((item) => item.id)).toEqual([
+      "long",
+    ])
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })
   })

@@ -28,8 +28,27 @@ export class ConfigError extends Error {}
 /** Account ids become directory names, so they may not contain separators or `..`. */
 const ACCOUNT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
-const pathKey = (value: string): string => {
+/** Windows drops trailing dots/spaces from path components; mirror that before path comparisons. */
+const normalizeWin32Path = (value: string): string => {
+  if (process.platform !== "win32") return value
   const resolved = path.resolve(value)
+  const root = path.parse(resolved).root
+  const parts = resolved
+    .slice(root.length)
+    .split(/[\\/]+/)
+    .filter(Boolean)
+  let changed = false
+  const normalized = parts.map((part) => {
+    const next = part.replace(/[. ]+$/, "")
+    if (next !== part) changed = true
+    return next
+  })
+  if (!changed) return value
+  return path.join(root, ...normalized.filter(Boolean))
+}
+
+const pathKey = (value: string): string => {
+  const resolved = path.resolve(normalizeWin32Path(value))
   return process.platform === "win32" ? resolved.toLowerCase() : resolved
 }
 
@@ -113,11 +132,13 @@ export function resolveAccounts(options: unknown, env: NodeJS.ProcessEnv = proce
     seen.add(id)
 
     const explicitDataDir = asString(entry.dataDir)
-    const dataDir = explicitDataDir
-      ? config.dataDir
-      : listProvided
-        ? path.join(root ?? defaultDataDir(config.username), id)
-        : config.dataDir
+    const dataDir = normalizeWin32Path(
+      explicitDataDir
+        ? config.dataDir
+        : listProvided
+          ? path.join(root ?? defaultDataDir(config.username), id)
+          : config.dataDir,
+    )
 
     // Windows paths are case-insensitive: `Mail` and `mail` hit the same directory.
     const dirKey = pathKey(dataDir)
@@ -166,7 +187,7 @@ export function resolveConfig(options: unknown, env: NodeJS.ProcessEnv = process
     selfAddress,
     caFile,
     storage: asStorageMode(opts.storage ?? env.MAIL_STORAGE) ?? "metadata",
-    dataDir: asString(opts.dataDir) ?? asString(env.MAIL_DATA_DIR) ?? defaultDataDir(username),
+    dataDir: normalizeWin32Path(asString(opts.dataDir) ?? asString(env.MAIL_DATA_DIR) ?? defaultDataDir(username)),
     maxMessages: Math.min(asInt(opts.maxMessages ?? env.MAIL_MAX_MESSAGES, 2000), 20_000),
     retentionDays: Math.min(asInt(opts.retentionDays ?? env.MAIL_RETENTION_DAYS, 365), 3650),
     maxBodyBytes: Math.min(asInt(opts.maxBodyBytes ?? env.MAIL_MAX_BODY_BYTES, 100_000), 1_000_000),

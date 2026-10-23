@@ -81,11 +81,14 @@ const stripControlChars = (value: string): string => {
 }
 
 const ftsQuery = (query: string): string | undefined => {
+  // Split on everything that is not a letter or digit: FTS5's unicode61 tokenizer
+  // treats apostrophes and punctuation as separators, so "O'Brien" must become
+  // "o" AND "brien", not "obrien". Every token is kept: silently dropping the 9th
+  // token would return messages that do not match the query.
   const tokens = stripControlChars(query)
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
     .split(/\s+/)
-    .map((token) => token.replace(/["'*()]/g, "").trim())
     .filter(Boolean)
-    .slice(0, 8)
   if (tokens.length === 0) return undefined
   return tokens.map((token) => `"${token}"*`).join(" AND ")
 }
