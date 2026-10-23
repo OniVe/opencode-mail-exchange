@@ -133,7 +133,15 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string } 
     )
   if (compactPrefix) {
     const date = parseDateTime(compactPrefix[1])
-    if (date) return { date, text: compactPrefix[2]?.trim() || undefined }
+    if (date) {
+      const rest = compactPrefix[2]?.trim()
+      if (rest && /^\d{1,2}(?::\d{2})?$/.test(rest)) {
+        const [hour, minute] = rest.split(":")
+        if (Number(hour) > 23 || (minute !== undefined && Number(minute) > 59)) return undefined
+        return { date: { ...date, hour, minute, mode: "hour" } }
+      }
+      return { date, text: rest || undefined }
+    }
   }
   const spaced = /^(\d{4})\s+(\d{1,2})\s+(\d{1,2})(?:\s+[Tt]?(\d{1,2})(?::(\d{2}))?)?(?:\s+(.*))?$/.exec(query.trim())
   if (!spaced) return undefined
@@ -164,7 +172,11 @@ interface ParsedTime {
 
 /** Reads an ISO time suffix; a letter immediately after it invalidates the match. */
 const parseTimeSuffix = (rest: string): ParsedTime | undefined => {
-  if (/^[Zz]/.test(rest)) return { zone: "Z" }
+  if (/^[Zz]/.test(rest)) {
+    const next = rest[1] ?? ""
+    if (/[A-Za-z0-9]/.test(next)) return undefined
+    return { zone: "Z" }
+  }
   const match =
     /^[Tt ]?(\d{1,2})(?::(\d{2})(?::(\d{2})(?:\.\d+)?)?|\.(\d{2})|[Hh](\d{2}))?([Zz]|[+-]\d{2}:?\d{2})?/.exec(rest)
   if (!match) return undefined
@@ -509,7 +521,13 @@ export function openStore(config: MailConfig): Store | undefined {
 
   const searchByDate = (date: DateTimeParts, take: number, rest?: string): MessageSummary[] => {
     const pattern = `%${date.year}%`
-    const needles = rest ? rest.toLowerCase().split(/\s+/).filter(Boolean) : []
+    const needles = rest
+      ? rest
+          .toLowerCase()
+          .replace(/[^\p{L}\p{N}]+/gu, " ")
+          .split(/\s+/)
+          .filter(Boolean)
+      : []
     const rows = db
       .query(`
         select m.*, b.body from messages m
@@ -520,7 +538,7 @@ export function openStore(config: MailConfig): Store | undefined {
       .all(pattern, pattern, pattern) as Array<MessageRow & { body: string | null }>
     return rows
       .filter((row) => {
-        const text = [row.subject, row.preview, row.body ?? ""].join("\n")
+        const text = [row.subject, row.from_addr, row.preview, row.body ?? ""].join("\n")
         if (!matchesDateText(text, date)) return false
         const lower = text.toLowerCase()
         return needles.every((needle) => lower.includes(needle))

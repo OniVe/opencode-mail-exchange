@@ -538,6 +538,32 @@ describe("store", () => {
     rmSync(config.dataDir, { recursive: true, force: true })
   })
 
+  test("date+text uses sender, rejects Z-text and accepts space-hour and quotes", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      { ...message("alice", "2026-10-23", "2026-10-10T09:00:00Z"), from: "unique@example.com" },
+      message("zebra", "2026-10-23Zebra", "2026-10-11T09:00:00Z"),
+      message("zone", "2026-10-23Zone", "2026-10-12T09:00:00Z"),
+      message("z10", "2026-10-23Z10", "2026-10-13T09:00:00Z"),
+      message("t10", "2026-10-23T10:00", "2026-10-14T09:00:00Z"),
+      message("t23", "2026-10-23T23:00", "2026-10-15T09:00:00Z"),
+      message("quote", "2026-10-23 quarterly report", "2026-10-16T09:00:00Z"),
+      message("amp", "2026-10-23 & report", "2026-10-17T09:00:00Z"),
+    ])
+    expect(store.search("2026-10-23 unique", 10).map((item) => item.id)).toEqual(["alice"])
+    const all = store.search("2026-10-23", 20).map((item) => item.id)
+    expect(all).not.toContain("zebra")
+    expect(all).not.toContain("zone")
+    expect(all).not.toContain("z10")
+    expect(store.search("2026-10-23 10", 10).map((item) => item.id)).toEqual(["t10"])
+    expect(store.search('2026-10-23 "quarterly report"', 10).map((item) => item.id)).toEqual(["quote"])
+    expect(store.search("2026-10-23 & report", 10).map((item) => item.id)).toEqual(["amp", "quote"])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
   test("a single-digit ISO hour still matches the date", () => {
     const config = baseConfig()
     const store = openStore(config)
