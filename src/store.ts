@@ -136,7 +136,13 @@ const parseSearchDate = (query: string): { date: DateTimeParts; text?: string } 
     if (date) {
       const rest = compactPrefix[2]?.trim()
       const timeRest = rest ? /^(\d{1,2})(?::(\d{2})(?::(\d{2}))?|[Hh](\d{2}))?(?:\s+(.*))?$/.exec(rest) : undefined
-      if (timeRest && (timeRest[2] !== undefined || timeRest[3] !== undefined || timeRest[4] !== undefined)) {
+      if (
+        timeRest &&
+        (timeRest[2] !== undefined ||
+          timeRest[3] !== undefined ||
+          timeRest[4] !== undefined ||
+          /^\d{1,2}$/.test(rest ?? ""))
+      ) {
         const hour = timeRest[1]
         const minute = timeRest[2]
         const hminute = timeRest[4]
@@ -598,6 +604,7 @@ export function openStore(config: MailConfig): Store | undefined {
         const withoutDate = text.replace(new RegExp(DATE_TEXT.source, "gu"), " ")
         const lower = withoutDate.toLowerCase()
         return needles.every((needle) => {
+          if (needle.length > 256) return lower.includes(needle)
           const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
           if (/^\d+$/.test(needle)) {
             return new RegExp(`(^|[^0-9])${escaped}([^0-9]|$)`).test(lower)

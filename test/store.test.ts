@@ -630,6 +630,20 @@ describe("store", () => {
     rmSync(config.dataDir, { recursive: true, force: true })
   })
 
+  test("bare hour after a date filters by hour", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      message("h10", "2026-10-23T10:00 report", "2026-10-10T09:00:00Z"),
+      message("h03", "2026-10-23T03:10 report", "2026-10-11T09:00:00Z"),
+      message("price", "2026-10-23 price 10 usd", "2026-10-12T09:00:00Z"),
+    ])
+    expect(store.search("2026-10-23 10", 10).map((item) => item.id)).toEqual(["h10"])
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
   test("a single-digit ISO hour still matches the date", () => {
     const config = baseConfig()
     const store = openStore(config)
