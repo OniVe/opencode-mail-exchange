@@ -26,6 +26,8 @@ describe("mergeSearchResults", () => {
         cc: [],
         recipientsKnown: false,
         preview: "local preview",
+        size: 100,
+        attachmentCount: 2,
       }),
     ]
     const remote = [
@@ -39,6 +41,8 @@ describe("mergeSearchResults", () => {
         recipientsKnown: true,
         hasAttachments: true,
         preview: "remote preview",
+        size: 200,
+        attachmentCount: 3,
       }),
       message("b", "2026-10-22T10:00:00Z"),
     ]
@@ -53,6 +57,8 @@ describe("mergeSearchResults", () => {
     expect(merged[0]?.cc).toEqual(["cc@example.com"])
     expect(merged[0]?.recipientsKnown).toBe(true)
     expect(merged[0]?.hasAttachments).toBe(true)
+    expect(merged[0]?.size).toBe(200)
+    expect(merged[0]?.attachmentCount).toBe(3)
     // The cached preview is body-derived and may be longer than the EWS one.
     expect(merged[0]?.preview).toBe("local preview")
   })

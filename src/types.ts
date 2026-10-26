@@ -1,5 +1,8 @@
 export type StorageMode = "off" | "metadata" | "full"
 
+/** EWS `ItemSize` is an Int32 (`item:Size`); reject larger hostile values. */
+export const MAX_ITEM_SIZE = 2_147_483_647
+
 export interface FolderDto {
   id: string
   name: string
@@ -23,6 +26,14 @@ export interface MessageSummary {
   received: string
   isRead: boolean
   hasAttachments: boolean
+  /** EWS `ItemSize` in bytes, when the item summary carried it (Find/Sync/Get). */
+  size?: number
+  /**
+   * Number of attachments when known. 0 may be derived from `hasAttachments: false` for
+   * cached rows; absent for a sync-only row with attachments until a live bind. Inline
+   * attachments are counted too, and a cached value can be stale after attachments change.
+   */
+  attachmentCount?: number
   preview: string
   conversationId?: string
   folderId?: string

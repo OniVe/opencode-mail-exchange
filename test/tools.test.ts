@@ -18,7 +18,9 @@ const backend: MailBackend = {
       to: ["b@example.com"],
       received: "2026-10-23T00:00:00Z",
       isRead: false,
-      hasAttachments: false,
+      hasAttachments: true,
+      size: 1234,
+      attachmentCount: 2,
       preview: "hello",
     },
   ],
@@ -122,6 +124,8 @@ describe("registerTools", () => {
     const list = registered.find((tool) => tool.name === "list")
     const result = await list?.execute({ limit: 5 })
     expect(result?.content).toContain("Hello")
+    expect(result?.content).toContain('"size": 1234')
+    expect(result?.content).toContain('"attachmentCount": 2')
 
     // The runtime guard rejects over-long and non-string queries before the backend.
     const search = registered.find((tool) => tool.name === "search")

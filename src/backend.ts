@@ -99,6 +99,17 @@ const folderKey = (folder: string | undefined): string => {
   }
 }
 
+/**
+ * `LoadPropertiesForItems` uses ReturnErrors: an item deleted between FindItems and the
+ * batch load comes back as an empty stub. Drop those rather than emitting a fake message.
+ */
+const dropFailedLoads = <T>(items: T[], responses: Array<{ Result: ServiceResult }> | undefined): T[] => {
+  if (!responses || responses.length !== items.length) return items
+  // A Warning response may be a not-processed stub (ErrorBatchProcessingStopped); only
+  // an explicit Success proves the item properties were populated.
+  return items.filter((_, index) => responses[index]?.Result === ServiceResult.Success)
+}
+
 const MAIL_FOLDERS = new Set(["wk:inbox", "wk:sent", "wk:drafts", "wk:deleted"])
 
 /**
@@ -132,6 +143,8 @@ export function mergeSearchResults(
       recipientsKnown: existing.recipientsKnown === true || message.recipientsKnown === true,
       preview: existing.preview || message.preview,
       hasAttachments: existing.hasAttachments || message.hasAttachments,
+      size: message.size ?? existing.size,
+      attachmentCount: message.attachmentCount ?? existing.attachmentCount,
     })
   }
   return [...byId.values()]
@@ -338,8 +351,18 @@ export class EwsBackend implements MailBackend {
     const page = await this.service.FindItems(folderId, new ItemView(input.limit, input.offset ?? 0))
     // LoadPropertiesForItems throws "The collection is empty." on an empty page.
     if (page.Items.length === 0) return []
-    await this.service.LoadPropertiesForItems(page.Items, MESSAGE_PROPERTY_SET)
-    return page.Items.map((item) => toSummary(item, key, true))
+    let loaded: { Responses?: Array<{ Result: ServiceResult }> } | undefined
+    try {
+      loaded = await this.service.LoadPropertiesForItems(page.Items, MESSAGE_PROPERTY_SET)
+    } catch (error) {
+      // The FindItems envelope is still useful if the batch property load failed.
+      console.warn(`[mail.exchange] ${this.config.id}: message property load failed: ${errorText(error)}`)
+    }
+    const responses = loaded?.Responses
+    const attachmentsKnown = responses !== undefined && responses.length === page.Items.length
+    return dropFailedLoads(page.Items, responses).map((item) =>
+      toSummary(item, key, attachmentsKnown, attachmentsKnown),
+    )
   }
 
   async searchMessages(input: { query: string; limit: number }): Promise<MessageSummary[]> {
@@ -364,8 +387,17 @@ export class EwsBackend implements MailBackend {
       view.OrderBy.Add(ItemSchema.DateTimeReceived, SortDirection.Descending)
       const page = await this.service.FindItems(WellKnownFolderName.Inbox, filter, view)
       if (page.Items.length > 0) {
-        await this.service.LoadPropertiesForItems(page.Items, MESSAGE_PROPERTY_SET)
-        remote = page.Items.map((item) => toSummary(item, undefined, true))
+        let loaded: { Responses?: Array<{ Result: ServiceResult }> } | undefined
+        try {
+          loaded = await this.service.LoadPropertiesForItems(page.Items, MESSAGE_PROPERTY_SET)
+        } catch (error) {
+          console.warn(`[mail.exchange] ${this.config.id}: message property load failed: ${errorText(error)}`)
+        }
+        const responses = loaded?.Responses
+        const attachmentsKnown = responses !== undefined && responses.length === page.Items.length
+        remote = dropFailedLoads(page.Items, responses).map((item) =>
+          toSummary(item, undefined, attachmentsKnown, attachmentsKnown),
+        )
       }
     } catch (error) {
       // Local FTS may still have useful results when EWS search is unavailable.
@@ -386,7 +418,7 @@ export class EwsBackend implements MailBackend {
     const raw = message.Body?.Text ?? ""
     const { body, truncated } = truncateToBytes(raw, this.config.maxBodyBytes)
     const bodyType = bodyTypeOf(message.Body?.BodyType)
-    const summary = toSummary(message, undefined, true)
+    const summary = toSummary(message, undefined, true, true)
     const cc = addressList(message.CcRecipients)
 
     let bodyCached = false
@@ -396,6 +428,8 @@ export class EwsBackend implements MailBackend {
     }
     // Recipients are not part of the sync property set; keep the cached row in sync.
     this.persistRecipients(id, summary.to, cc)
+    // `mail_get` is a bind: size and attachment count are now known even if sync omitted them.
+    this.persistMetadata(id, { size: summary.size, attachmentCount: summary.attachmentCount })
 
     return { ...summary, cc, body, bodyType, truncated, fetched: true, bodyCached }
   }
@@ -587,6 +621,14 @@ export class EwsBackend implements MailBackend {
       this.store?.updateRecipients(id, to, cc)
     } catch (error) {
       console.warn(`[mail.exchange] ${this.config.id}: could not cache recipients for ${id}: ${errorText(error)}`)
+    }
+  }
+
+  private persistMetadata(id: string, input: { size?: number; attachmentCount?: number }): void {
+    try {
+      this.store?.updateMetadata(id, input)
+    } catch (error) {
+      console.warn(`[mail.exchange] ${this.config.id}: could not cache metadata for ${id}: ${errorText(error)}`)
     }
   }
 

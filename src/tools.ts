@@ -144,7 +144,7 @@ export async function registerTools(
     add({
       name: "list",
       description:
-        "List recent messages in a folder (metadata only, newest first). Folder accepts inbox/sent/drafts/deleted or a display name; default inbox.",
+        "List recent messages in a folder (metadata incl. size in bytes and attachmentCount when known, newest first). Folder accepts inbox/sent/drafts/deleted or a display name; default inbox.",
       input: {
         type: "object",
         properties: {
@@ -178,7 +178,8 @@ export async function registerTools(
 
     add({
       name: "search",
-      description: "Search messages by text (local FTS index when available, otherwise EWS subject/body search).",
+      description:
+        "Search messages by text (local FTS index when available, otherwise EWS subject/body search); same metadata as mail_list.",
       input: {
         type: "object",
         properties: {
@@ -211,7 +212,8 @@ export async function registerTools(
 
     add({
       name: "get",
-      description: "Read one message by id, including the body (truncated to the configured limit).",
+      description:
+        "Read one message by id, including the body (truncated), size in bytes and attachment count when known.",
       input: {
         type: "object",
         properties: {

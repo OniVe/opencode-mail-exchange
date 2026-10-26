@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs"
 import path from "node:path"
 import type { MailConfig } from "./config"
 import type { MessageDetail, MessageSummary } from "./types"
+import { MAX_ITEM_SIZE } from "./types"
 
 interface MessageRow {
   id: string
@@ -15,6 +16,8 @@ interface MessageRow {
   received_ts: number
   is_read: number
   has_attachments: number
+  size: number | null
+  attachment_count: number | null
   preview: string
   conversation_id: string | null
   deleted: number
@@ -33,6 +36,8 @@ create table if not exists messages (
   received_ts integer not null default 0,
   is_read integer not null default 0,
   has_attachments integer not null default 0,
+  size integer,
+  attachment_count integer,
   preview text not null default '',
   conversation_id text,
   deleted integer not null default 0,
@@ -68,6 +73,9 @@ const ADDED_COLUMNS = [
   "alter table messages add column cc_addrs text not null default ''",
   // Distinguishes "bind returned an empty list" from "recipients never fetched".
   "alter table messages add column recipients_fetched integer not null default 0",
+  // ItemSize is a summary property; attachment_count is filled by a live list/bind only.
+  "alter table messages add column size integer",
+  "alter table messages add column attachment_count integer",
 ]
 
 const stripControlChars = (value: string): string => {
@@ -652,6 +660,12 @@ const splitAddresses = (value: string | null | undefined): string[] =>
         .filter(Boolean)
     : []
 
+const normalizeSize = (value: unknown): number | null =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= MAX_ITEM_SIZE ? Math.trunc(value) : null
+
+const normalizeAttachmentCount = (value: unknown): number | null =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= MAX_ITEM_SIZE ? value : null
+
 const rowToSummary = (row: MessageRow): MessageSummary => {
   const cc = splitAddresses(row.cc_addrs)
   const summary: MessageSummary = {
@@ -665,6 +679,10 @@ const rowToSummary = (row: MessageRow): MessageSummary => {
     received: row.received,
     isRead: row.is_read === 1,
     hasAttachments: row.has_attachments === 1,
+    size: normalizeSize(row.size) ?? undefined,
+    attachmentCount:
+      normalizeAttachmentCount(row.attachment_count) ??
+      (row.attachment_count === null && row.has_attachments === 0 ? 0 : undefined),
     preview: row.preview,
     conversationId: row.conversation_id ?? undefined,
     folderId: row.folder_id ?? undefined,
@@ -680,6 +698,8 @@ export interface Store {
   tombstoneFolder(folderId: string): number
   markRead(ids: string[], isRead: boolean): void
   updateRecipients(id: string, to: string[], cc: string[]): void
+  /** Fill size/attachment count learned from a live bind; `undefined` keeps the old value. */
+  updateMetadata(id: string, input: { size?: number; attachmentCount?: number }): void
   listMessages(input: { folderId?: string; limit: number; offset?: number }): MessageSummary[]
   search(query: string, limit: number): MessageSummary[]
   getMessage(id: string): MessageDetail | undefined
@@ -724,8 +744,8 @@ export function openStore(config: MailConfig): Store | undefined {
     const now = Date.now()
     const insert = db.query(`
       insert into messages (id, folder_id, subject, from_addr, to_addrs, cc_addrs, received, received_ts, is_read,
-                            has_attachments, preview, conversation_id, deleted, updated_ts)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                            has_attachments, size, attachment_count, preview, conversation_id, deleted, updated_ts)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
       on conflict(id) do update set
         folder_id = excluded.folder_id,
         subject = excluded.subject,
@@ -738,6 +758,11 @@ export function openStore(config: MailConfig): Store | undefined {
         received_ts = excluded.received_ts,
         is_read = excluded.is_read,
         has_attachments = excluded.has_attachments,
+        size = coalesce(excluded.size, messages.size),
+        attachment_count = case
+          when excluded.has_attachments <> messages.has_attachments then excluded.attachment_count
+          else coalesce(excluded.attachment_count, messages.attachment_count)
+        end,
         preview = excluded.preview,
         conversation_id = excluded.conversation_id,
         deleted = 0,
@@ -745,6 +770,8 @@ export function openStore(config: MailConfig): Store | undefined {
     `)
     for (const message of messages) {
       const receivedTs = Number.isFinite(Date.parse(message.received)) ? Date.parse(message.received) : 0
+      const size = normalizeSize(message.size)
+      const attachmentCount = normalizeAttachmentCount(message.attachmentCount)
       insert.run(
         message.id,
         folderId,
@@ -756,6 +783,8 @@ export function openStore(config: MailConfig): Store | undefined {
         receivedTs,
         message.isRead ? 1 : 0,
         message.hasAttachments ? 1 : 0,
+        size,
+        attachmentCount,
         message.preview,
         message.conversationId ?? null,
         now,
@@ -801,6 +830,15 @@ export function openStore(config: MailConfig): Store | undefined {
       id,
     )
   })
+
+  const updateMetadata = (id: string, input: { size?: number; attachmentCount?: number }): void => {
+    const size = normalizeSize(input.size)
+    const attachmentCount = normalizeAttachmentCount(input.attachmentCount)
+    if (size === null && attachmentCount === null) return
+    db.query(
+      "update messages set size = coalesce(?, size), attachment_count = coalesce(?, attachment_count), updated_ts = ? where id = ? and deleted = 0",
+    ).run(size, attachmentCount, Date.now(), id)
+  }
 
   const searchByDate = (date: DateTimeParts, take: number, rest?: string): MessageSummary[] => {
     const pattern = `%${date.year}%`
@@ -888,6 +926,7 @@ export function openStore(config: MailConfig): Store | undefined {
     tombstoneFolder,
     markRead,
     updateRecipients,
+    updateMetadata,
     listMessages({ folderId, limit, offset = 0 }) {
       const rows = folderId
         ? db

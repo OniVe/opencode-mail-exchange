@@ -42,7 +42,7 @@ Reads and sends mail, lists calendar events and contacts from an on-prem Exchang
 NTLM. Runs inside OpenCode V2 as a native TypeScript plugin: Bun executes `src/index.ts` directly, no build step.
 
 Verified on Exchange 2016 (build 15.1.2507.6), NTLMv2, internal CA. Bun 1.4.2, `@opencode/plugin` 2.0.26,
-137 tests.
+156 tests.
 
 ## Features
 
@@ -193,9 +193,9 @@ Top-level options are inherited by `accounts[]`; per-account values win, except 
 |---|---|
 | `mail_accounts` | list accounts (id, address, EWS URL, storage mode) |
 | `mail_folders` | folders with unread/total |
-| `mail_list` | messages in a folder (metadata, paging) |
-| `mail_search` | local FTS + EWS body search (Inbox), merged and deduplicated |
-| `mail_get` | message + body; `fetched` / `bodyCached` |
+| `mail_list` | messages in a folder (metadata incl. `size`; `attachmentCount` when known; paging) |
+| `mail_search` | local FTS + EWS body search (Inbox), merged and deduplicated; same fields as `mail_list` |
+| `mail_get` | message + body; `size` (when known), `attachmentCount` (when known), `fetched` / `bodyCached` |
 | `mail_delete` | delete by ids; soft (move to Deleted Items; the old id becomes invalid) or `hard: true` (permanent) |
 | `mail_empty_deleted` | permanently delete top-level items in Deleted Items (subfolders remain); requires `confirm: true` |
 | `mail_sync` | incremental `SyncFolderItems`; `{synced, complete}` |
@@ -227,6 +227,20 @@ failure after the request may leave the outcome unknown: run `mail_sync` before 
 
 Ids are passed to EWS `DeleteItem`, so pass mail ids only. If a meeting id is supplied, EWS deletes it with
 `SendToNone` (attendees are not notified); the plugin does not distinguish item classes before deleting.
+
+### Message fields
+
+`mail_list`, `mail_search` and `mail_get` include `size` (EWS `ItemSize`, bytes) whenever the item
+summary carries it; no extra EWS call is made. `attachmentCount` (inline attachments included) is present
+when the item was loaded with the `Attachments` property: in a `mail_get` that performs a bind, and in
+`mail_list`/`mail_search` results from a live EWS page. For a cached row, 0 is derived from
+`hasAttachments: false`; a row with attachments omits the count until a live bind. The count is a cached
+measurement and can be stale after attachments change. A body cached by an older index may omit both fields.
+`hasAttachments` remains the cheap boolean. `mail_get` persists the learned `size`/`attachmentCount` in the
+local index. Per-item rows with an unconfirmed batch load (`Error`/`Warning`) are omitted. If the whole batch
+load fails, rows fall back to the FindItems envelope: `id`, `subject`, `size`, `hasAttachments`; there is no
+`attachmentCount` and `recipientsKnown` is `false`; cached/search paths then enrich recipients lazily, while a
+live `mail_list` page returns the envelope as-is (it may have an empty `to`).
 
 Search scope: every search merges local FTS (`inbox`, `sent`, `drafts`, `deleted`) with the EWS subject/body
 search in `Inbox`, deduplicating by id and returning the newest `limit` matches. Other folders are not covered

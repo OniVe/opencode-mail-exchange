@@ -355,6 +355,138 @@ describe("store", () => {
     rmSync(config.dataDir, { recursive: true, force: true })
   })
 
+  test("persists size and attachment count and keeps them across sync upserts", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+
+    store.upsertMessages("wk:inbox", [
+      {
+        ...message("1", "Subject", "2026-10-23T09:41:32Z"),
+        hasAttachments: true,
+        size: 1234,
+        attachmentCount: 2,
+      },
+    ])
+    const [first] = store.listMessages({ folderId: "wk:inbox", limit: 10 })
+    expect(first?.size).toBe(1234)
+    expect(first?.attachmentCount).toBe(2)
+
+    // A sync upsert has neither field; the known values must survive.
+    store.upsertMessages("wk:inbox", [{ ...message("1", "Subject v2", "2026-10-23T09:41:32Z"), hasAttachments: true }])
+    const [second] = store.listMessages({ folderId: "wk:inbox", limit: 10 })
+    expect(second?.size).toBe(1234)
+    expect(second?.attachmentCount).toBe(2)
+
+    store.updateMetadata("1", { size: 999, attachmentCount: 3 })
+    const [third] = store.listMessages({ folderId: "wk:inbox", limit: 10 })
+    expect(third?.size).toBe(999)
+    expect(third?.attachmentCount).toBe(3)
+    expect(store.getMessage("1")?.size).toBe(999)
+    expect(store.getMessage("1")?.attachmentCount).toBe(3)
+
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
+  test("opens a pre-size database and adds the new columns", () => {
+    const config = baseConfig()
+    mkdirSync(config.dataDir, { recursive: true })
+    const db = new Database(path.join(config.dataDir, "mail.db"))
+    db.run(`
+      create table messages (
+        id text primary key,
+        folder_id text,
+        subject text not null default '',
+        from_addr text not null default '',
+        to_addrs text not null default '',
+        cc_addrs text not null default '',
+        received text not null default '',
+        received_ts integer not null default 0,
+        is_read integer not null default 0,
+        has_attachments integer not null default 0,
+        preview text not null default '',
+        conversation_id text,
+        deleted integer not null default 0,
+        recipients_fetched integer not null default 0,
+        updated_ts integer not null default 0
+      )
+    `)
+    db.run(
+      "insert into messages (id, folder_id, subject, received, has_attachments, deleted) values ('old', 'wk:inbox', 'Old', '2026-10-23T00:00:00Z', 0, 0)",
+    )
+    db.close()
+
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+    const [row] = store.listMessages({ folderId: "wk:inbox", limit: 10 })
+    expect(row?.id).toBe("old")
+    expect(row?.size).toBeUndefined()
+    expect(row?.attachmentCount).toBe(0)
+
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
+  test("normalizes invalid size and attachment metadata on every write path", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+
+    store.upsertMessages("wk:inbox", [
+      {
+        ...message("bad", "Bad metadata", "2026-10-23T09:41:32Z"),
+        hasAttachments: true,
+        size: -1,
+        attachmentCount: 2.5,
+      },
+    ])
+    const [row] = store.listMessages({ folderId: "wk:inbox", limit: 10 })
+    expect(row?.size).toBeUndefined()
+    expect(row?.attachmentCount).toBeUndefined()
+
+    store.updateMetadata("bad", { size: Number.POSITIVE_INFINITY, attachmentCount: -2 })
+    const [after] = store.listMessages({ folderId: "wk:inbox", limit: 10 })
+    expect(after?.size).toBeUndefined()
+    expect(after?.attachmentCount).toBeUndefined()
+
+    store.updateMetadata("bad", { attachmentCount: 2_147_483_648 })
+    const [tooMany] = store.listMessages({ folderId: "wk:inbox", limit: 10 })
+    expect(tooMany?.attachmentCount).toBeUndefined()
+
+    const db = new Database(path.join(config.dataDir, "mail.db"))
+    const stored = db.query("select size, attachment_count from messages where id = 'bad'").get() as {
+      size: number | null
+      attachment_count: number | null
+    }
+    expect(stored).toEqual({ size: null, attachment_count: null })
+    db.close()
+
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
+  test("resets attachment count when hasAttachments changes", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+
+    store.upsertMessages("wk:inbox", [
+      {
+        ...message("1", "Subject", "2026-10-23T09:41:32Z"),
+        hasAttachments: true,
+        attachmentCount: 2,
+      },
+    ])
+    store.upsertMessages("wk:inbox", [message("1", "Subject", "2026-10-23T09:41:32Z")])
+    const [row] = store.listMessages({ folderId: "wk:inbox", limit: 10 })
+    expect(row?.hasAttachments).toBe(false)
+    expect(row?.attachmentCount).toBe(0)
+
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
   test("searches apostrophes and every token, not just the first eight", () => {
     const config = baseConfig()
     const store = openStore(config)
