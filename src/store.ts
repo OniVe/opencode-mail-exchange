@@ -18,6 +18,7 @@ interface MessageRow {
   has_attachments: number
   size: number | null
   attachment_count: number | null
+  metadata_checked: number
   preview: string
   conversation_id: string | null
   deleted: number
@@ -38,6 +39,7 @@ create table if not exists messages (
   has_attachments integer not null default 0,
   size integer,
   attachment_count integer,
+  metadata_checked integer not null default 0,
   preview text not null default '',
   conversation_id text,
   deleted integer not null default 0,
@@ -76,6 +78,8 @@ const ADDED_COLUMNS = [
   // ItemSize is a summary property; attachment_count is filled by a live list/bind only.
   "alter table messages add column size integer",
   "alter table messages add column attachment_count integer",
+  // A successful bind is remembered even if the server omitted Size/Attachments.
+  "alter table messages add column metadata_checked integer not null default 0",
 ]
 
 const stripControlChars = (value: string): string => {
@@ -698,8 +702,12 @@ export interface Store {
   tombstoneFolder(folderId: string): number
   markRead(ids: string[], isRead: boolean): void
   updateRecipients(id: string, to: string[], cc: string[]): void
-  /** Fill size/attachment count learned from a live bind; `undefined` keeps the old value. */
-  updateMetadata(id: string, input: { size?: number; attachmentCount?: number }): void
+  /** Fill size/attachment count learned from a live bind; `undefined` keeps, `null` clears the count. */
+  updateMetadata(id: string, input: { size?: number; attachmentCount?: number | null; hasAttachments?: boolean }): void
+  /** Whether a batch bind already tried to read Size/Attachments for this row. */
+  isMetadataChecked(id: string): boolean
+  /** Remember a successful/failed batch attempt so it is not retried on every page. */
+  markMetadataChecked(ids: string[]): void
   listMessages(input: { folderId?: string; limit: number; offset?: number }): MessageSummary[]
   search(query: string, limit: number): MessageSummary[]
   getMessage(id: string): MessageDetail | undefined
@@ -763,6 +771,7 @@ export function openStore(config: MailConfig): Store | undefined {
           when excluded.has_attachments <> messages.has_attachments then excluded.attachment_count
           else coalesce(excluded.attachment_count, messages.attachment_count)
         end,
+        metadata_checked = 0,
         preview = excluded.preview,
         conversation_id = excluded.conversation_id,
         deleted = 0,
@@ -831,14 +840,30 @@ export function openStore(config: MailConfig): Store | undefined {
     )
   })
 
-  const updateMetadata = (id: string, input: { size?: number; attachmentCount?: number }): void => {
+  const updateMetadata = (
+    id: string,
+    input: { size?: number; attachmentCount?: number | null; hasAttachments?: boolean },
+  ): void => {
     const size = normalizeSize(input.size)
-    const attachmentCount = normalizeAttachmentCount(input.attachmentCount)
-    if (size === null && attachmentCount === null) return
+    const clearAttachmentCount = input.attachmentCount === null
+    const attachmentCount = clearAttachmentCount ? null : normalizeAttachmentCount(input.attachmentCount)
+    const hasAttachments = typeof input.hasAttachments === "boolean" ? (input.hasAttachments ? 1 : 0) : null
+    if (size === null && attachmentCount === null && hasAttachments === null && !clearAttachmentCount) return
     db.query(
-      "update messages set size = coalesce(?, size), attachment_count = coalesce(?, attachment_count), updated_ts = ? where id = ? and deleted = 0",
-    ).run(size, attachmentCount, Date.now(), id)
+      "update messages set size = coalesce(?, size), attachment_count = case when ? then null else coalesce(?, attachment_count) end, has_attachments = coalesce(?, has_attachments), updated_ts = ? where id = ? and deleted = 0",
+    ).run(size, clearAttachmentCount ? 1 : 0, attachmentCount, hasAttachments, Date.now(), id)
   }
+
+  const metadataChecked = db.query(
+    "select 1 as checked from messages where id = ? and metadata_checked = 1 and deleted = 0",
+  )
+
+  const isMetadataChecked = (id: string): boolean => metadataChecked.get(id) !== null
+
+  const markMetadataChecked = db.transaction((ids: string[]) => {
+    const mark = db.query("update messages set metadata_checked = 1 where id = ? and deleted = 0")
+    for (const id of ids) mark.run(id)
+  })
 
   const searchByDate = (date: DateTimeParts, take: number, rest?: string): MessageSummary[] => {
     const pattern = `%${date.year}%`
@@ -927,6 +952,8 @@ export function openStore(config: MailConfig): Store | undefined {
     markRead,
     updateRecipients,
     updateMetadata,
+    isMetadataChecked,
+    markMetadataChecked,
     listMessages({ folderId, limit, offset = 0 }) {
       const rows = folderId
         ? db

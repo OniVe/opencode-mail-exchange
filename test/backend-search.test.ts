@@ -69,6 +69,7 @@ describe("searchMessages", () => {
         return { Items: [] }
       },
       LoadPropertiesForItems: async () => {},
+      BindToItems: async () => ({ Responses: [] }),
     }
 
     const found = await backend.searchMessages({ query: "invoice", limit: 2 })
@@ -97,6 +98,7 @@ describe("searchMessages", () => {
     ;(backend as unknown as { service: unknown }).service = {
       FindItems: async () => ({ Items: [ewsItem()] }),
       LoadPropertiesForItems: async () => {},
+      BindToItems: async () => ({ Responses: [] }),
     }
 
     const found = await backend.searchMessages({ query: "invoice", limit: 10 })

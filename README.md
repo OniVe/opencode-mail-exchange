@@ -42,7 +42,7 @@ Reads and sends mail, lists calendar events and contacts from an on-prem Exchang
 NTLM. Runs inside OpenCode V2 as a native TypeScript plugin: Bun executes `src/index.ts` directly, no build step.
 
 Verified on Exchange 2016 (build 15.1.2507.6), NTLMv2, internal CA. Bun 1.4.2, `@opencode/plugin` 2.0.26,
-156 tests.
+166 tests.
 
 ## Features
 
@@ -231,10 +231,13 @@ Ids are passed to EWS `DeleteItem`, so pass mail ids only. If a meeting id is su
 ### Message fields
 
 `mail_list`, `mail_search` and `mail_get` include `size` (EWS `ItemSize`, bytes) whenever the item
-summary carries it; no extra EWS call is made. `attachmentCount` (inline attachments included) is present
-when the item was loaded with the `Attachments` property: in a `mail_get` that performs a bind, and in
-`mail_list`/`mail_search` results from a live EWS page. For a cached row, 0 is derived from
-`hasAttachments: false`; a row with attachments omits the count until a live bind. The count is a cached
+summary carries it. On a live EWS page these fields come from the existing `AllProperties` response; a
+cached page missing them performs at most one `BindToItems` batch (Size/HasAttachments/Attachments + To/Cc,
+no Body) and persists the result; a confirmed Success is not retried, while Error/Warning/empty batches
+retry after a 60-second cooldown. `attachmentCount` (inline attachments included) is
+present when the item was loaded with the `Attachments` property: in a `mail_get` that performs a bind, and
+in `mail_list`/`mail_search` results from a live EWS page or after that batch. For a cached row, 0 is derived
+from `hasAttachments: false`; a row with attachments omits the count until a live bind. The count is a cached
 measurement and can be stale after attachments change. A body cached by an older index may omit both fields.
 `hasAttachments` remains the cheap boolean. `mail_get` persists the learned `size`/`attachmentCount` in the
 local index. Per-item rows with an unconfirmed batch load (`Error`/`Warning`) are omitted. If the whole batch
@@ -245,7 +248,8 @@ live `mail_list` page returns the envelope as-is (it may have an empty `to`).
 Search scope: every search merges local FTS (`inbox`, `sent`, `drafts`, `deleted`) with the EWS subject/body
 search in `Inbox`, deduplicating by id and returning the newest `limit` matches. Other folders are not covered
 by the EWS half. Expect one EWS `FindItems` call (~0.5 s), one `LoadPropertiesForItems` (GetItem) for a
-non-empty page, and one `BindToItems` when the result contains messages with unknown recipients.
+non-empty page, and one `BindToItems` when the result contains messages with unknown recipients or missing
+`size`/`attachmentCount`; that batch does not request `Body`.
 
 Local FTS treats punctuation inside a word as a token boundary and keeps the parts adjacent (`R&D` and
 `R & D` both match `R D`). Numeric fragments and email addresses are matched as phrase prefixes first, with an
@@ -257,13 +261,15 @@ Runtime note: tool names, `codemode` visibility and permission enforcement are d
 
 ### Recipients
 
-`SyncFolderItems` does not return `To`/`Cc`. For a page with unknown recipients, `mail_list`/`mail_search`
-performs one `BindToItems` (`ToRecipients` + `CcRecipients`) and caches the result; `mail_get` also updates
+`SyncFolderItems` does not return `To`/`Cc`. For a page with unknown recipients, or with missing
+`size`/`attachmentCount`, `mail_list`/`mail_search` performs one `BindToItems` (`ToRecipients` + `CcRecipients` +
+`Size` + `HasAttachments` + `Attachments`, no `Body`) and caches the result; `mail_get` also updates
 `to`/`cc`. `recipientsKnown: true` means the values are reliable (including "no recipients");
 `false` means enrichment failed or missed its budget, `to` is empty and `cc` is omitted.
 
-Enrichment adds at most `min(2000, max(500, requestTimeoutMs/5))` ms of latency. On timeout the page is returned
-with `recipientsKnown: false` and enrichment is parked for 60 seconds.
+The enrichment budget covers the EWS wait (`min(2000, max(500, requestTimeoutMs/5))` ms); persisting the
+page to SQLite is local work and is not part of that budget. On timeout, transport error or a non-Success
+batch, unconfirmed rows are returned with unknown fields and enrichment is parked for 60 seconds.
 
 ### Errors
 

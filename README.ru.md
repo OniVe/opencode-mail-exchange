@@ -42,7 +42,7 @@
 Работает внутри OpenCode V2 как нативный TypeScript-плагин: Bun исполняет `src/index.ts` напрямую, сборка не нужна.
 
 Проверено на Exchange 2016 (build 15.1.2507.6), NTLMv2, внутренний CA. Bun 1.4.2, `@opencode/plugin` 2.0.26,
-156 тестов.
+166 тестов.
 
 ## Возможности
 
@@ -231,12 +231,15 @@ Id передаются в EWS `DeleteItem`, поэтому передавайт
 ### Поля письма
 
 `mail_list`, `mail_search` и `mail_get` отдают `size` (EWS `ItemSize`, байты), если размер пришёл в
-summary; дополнительного EWS-запроса нет. `attachmentCount` (включая inline-вложения) присутствует, когда
-элемент загружен со свойством `Attachments`: в `mail_get`, выполняющем bind, и в результатах
-`mail_list`/`mail_search` с живой EWS-страницы. Для кэшированной строки 0 выводится из
-`hasAttachments: false`; при наличии вложений count отсутствует до живого bind. Это кэшированное измерение,
-и после изменения вложений оно может устареть. У тела, закэшированного старой версией, оба поля могут
-отсутствовать. `hasAttachments` остаётся дешёвым boolean. `mail_get` сохраняет полученные
+summary. На живой EWS-странице поля приходят из уже запрошенного `AllProperties`; кэшированная страница
+без них делает максимум один batch `BindToItems` (Size/HasAttachments/Attachments + To/Cc, без Body) и
+сохраняет результат; подтверждённый Success не повторяется, а Error/Warning/пустой batch повторяется
+после 60-секундного кулдауна. `attachmentCount` (включая inline-вложения)
+присутствует, когда элемент загружен со свойством `Attachments`: в `mail_get`, выполняющем bind, и в
+результатах `mail_list`/`mail_search` с живой EWS-страницы или после этого batch. Для кэшированной строки
+0 выводится из `hasAttachments: false`; при наличии вложений count отсутствует до живого bind. Это
+кэшированное измерение, и после изменения вложений оно может устареть. У тела, закэшированного старой
+версией, оба поля могут отсутствовать. `hasAttachments` остаётся дешёвым boolean. `mail_get` сохраняет полученные
 `size`/`attachmentCount` в локальный индекс. Строки с неподтверждённой batch-загрузкой (`Error`/`Warning`)
 отбрасываются. Если вся batch-загрузка упала, строки возвращаются как envelope из FindItems: `id`, `subject`,
 `size`, `hasAttachments`; `attachmentCount` нет, `recipientsKnown` = `false`; кэшированный/search-путь
@@ -245,7 +248,8 @@ summary; дополнительного EWS-запроса нет. `attachmentCo
 Область поиска: каждый поиск объединяет локальный FTS (`inbox`, `sent`, `drafts`, `deleted`) с EWS-поиском
 по subject/body в `Inbox`, дедупликация по id; возвращаются самые новые `limit` совпадений. Остальные папки
 EWS-половиной не покрываются. Один EWS-вызов `FindItems` (~0.5 с), один `LoadPropertiesForItems` (GetItem) для
-непустой страницы и `BindToItems`, если в выдаче есть письма с неизвестными получателями.
+непустой страницы и `BindToItems`, если в выдаче есть письма с неизвестными получателями или без
+`size`/`attachmentCount`; этот batch не запрашивает `Body`.
 
 Локальный FTS трактует пунктуацию внутри слова как границу токенов и сохраняет их смежность (`R&D` и
 `R & D` ищут фразу `R D`). Числовые фрагменты и email-адреса сначала ищутся как фразовые префиксы, затем —
@@ -256,13 +260,15 @@ Runtime-оговорка: имена tools, видимость `codemode` и per
 
 ### Получатели
 
-`SyncFolderItems` не возвращает `To`/`Cc`. Для страницы с неизвестными получателями `mail_list`/`mail_search`
-делает один `BindToItems` (`ToRecipients` + `CcRecipients`) и кэширует результат; `mail_get` тоже обновляет
+`SyncFolderItems` не возвращает `To`/`Cc`. Для страницы с неизвестными получателями или без
+`size`/`attachmentCount` `mail_list`/`mail_search` делает один `BindToItems` (`ToRecipients` + `CcRecipients`
++ `Size` + `HasAttachments` + `Attachments`, без `Body`) и кэширует результат; `mail_get` тоже обновляет
 `to`/`cc`. `recipientsKnown: true` — значения достоверны (включая «получателей нет»);
 `false` — enrichment не удался или не уложился в бюджет, `to` пуст, `cc` отсутствует.
 
-Enrichment добавляет не более `min(2000, max(500, requestTimeoutMs/5))` мс задержки. При таймауте страница
-возвращается с `recipientsKnown: false`, а enrichment паркуется на 60 секунд.
+Бюджет enrichment покрывает ожидание EWS (`min(2000, max(500, requestTimeoutMs/5))` мс); запись страницы
+в SQLite — локальная работа и в бюджет не входит. При таймауте, транспортной ошибке или non-Success batch
+неподтверждённые строки возвращаются с неизвестными полями, а enrichment паркуется на 60 секунд.
 
 ### Ошибки
 

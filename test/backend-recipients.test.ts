@@ -127,6 +127,322 @@ describe("cached recipients", () => {
     rmSync(cfg.dataDir, { recursive: true, force: true })
   })
 
+  test("a cached page fills size and attachment count in one bind and does not retry", async () => {
+    const cfg = config()
+    const store = openStore(cfg)
+    if (!store) throw new Error("store expected")
+
+    store.upsertMessages("wk:inbox", [
+      { ...message("1", ["to@example.com"]), hasAttachments: true, recipientsKnown: true },
+    ])
+    freshState(store)
+
+    let binds = 0
+    const backend = new EwsBackend(cfg, store)
+    fakeService(backend, {
+      BindToItems: async (ids: Array<{ UniqueId?: string }>) => {
+        binds++
+        return {
+          Responses: ids.map((id) => ({
+            Result: 0,
+            Item: {
+              Id: { UniqueId: id.UniqueId },
+              ToRecipients: recipients(["to@example.com"]),
+              CcRecipients: recipients([]),
+              Size: 4321,
+              HasAttachments: true,
+              Attachments: { Count: 2 },
+            },
+          })),
+        }
+      },
+    })
+
+    const first = await backend.listMessages({ limit: 10 })
+    expect(first[0]?.size).toBe(4321)
+    expect(first[0]?.attachmentCount).toBe(2)
+    expect(binds).toBe(1)
+
+    // metadata_checked is persisted, so the next page does not bind again.
+    const second = await backend.listMessages({ limit: 10 })
+    expect(second[0]?.size).toBe(4321)
+    expect(second[0]?.attachmentCount).toBe(2)
+    expect(binds).toBe(1)
+
+    backend.close()
+    rmSync(cfg.dataDir, { recursive: true, force: true })
+  })
+
+  test("a complete cached row does not trigger a bind", async () => {
+    const cfg = config()
+    const store = openStore(cfg)
+    if (!store) throw new Error("store expected")
+
+    store.upsertMessages("wk:inbox", [
+      { ...message("1", ["to@example.com"]), size: 1234, attachmentCount: 0, recipientsKnown: true },
+    ])
+    freshState(store)
+
+    let binds = 0
+    const backend = new EwsBackend(cfg, store)
+    fakeService(backend, {
+      BindToItems: async () => {
+        binds++
+        return { Responses: [] }
+      },
+    })
+
+    const page = await backend.listMessages({ limit: 10 })
+    expect(page[0]?.size).toBe(1234)
+    expect(binds).toBe(0)
+
+    backend.close()
+    rmSync(cfg.dataDir, { recursive: true, force: true })
+  })
+
+  test("an Error batch does not mark metadata checked and cools down", async () => {
+    const cfg = config()
+    const store = openStore(cfg)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [{ ...message("1", ["to@example.com"]), recipientsKnown: true }])
+    freshState(store)
+
+    let binds = 0
+    const backend = new EwsBackend(cfg, store)
+    fakeService(backend, {
+      BindToItems: async () => {
+        binds++
+        return { Responses: [{ Result: 2 }] }
+      },
+    })
+
+    const first = await backend.listMessages({ limit: 10 })
+    expect(first[0]?.size).toBeUndefined()
+    expect(store.isMetadataChecked("1")).toBe(false)
+    // The cooldown prevents a second batch on the next page.
+    await backend.listMessages({ limit: 10 })
+    expect(binds).toBe(1)
+
+    backend.close()
+    rmSync(cfg.dataDir, { recursive: true, force: true })
+  })
+
+  test("a Success without To/Cc does not erase known recipients", async () => {
+    const cfg = config()
+    const store = openStore(cfg)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      {
+        ...message("1", ["keep@example.com"], ["cc@example.com"]),
+        recipientsKnown: true,
+      },
+    ])
+    freshState(store)
+
+    const backend = new EwsBackend(cfg, store)
+    fakeService(backend, {
+      BindToItems: async (ids: Array<{ UniqueId?: string }>) => ({
+        Responses: ids.map((id) => ({
+          Result: 0,
+          Item: { Id: { UniqueId: id.UniqueId }, Size: 5000, HasAttachments: false },
+        })),
+      }),
+    })
+
+    const [row] = await backend.listMessages({ limit: 10 })
+    expect(row?.to).toEqual(["keep@example.com"])
+    expect(row?.cc).toEqual(["cc@example.com"])
+    expect(row?.size).toBe(5000)
+    expect(store.listMessages({ folderId: "wk:inbox", limit: 10 })[0]?.to).toEqual(["keep@example.com"])
+
+    backend.close()
+    rmSync(cfg.dataDir, { recursive: true, force: true })
+  })
+
+  test("hasAttachments learned from the batch is persisted", async () => {
+    const cfg = config()
+    const store = openStore(cfg)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      { ...message("1", ["to@example.com"]), hasAttachments: true, attachmentCount: 2, recipientsKnown: true },
+    ])
+    freshState(store)
+
+    const backend = new EwsBackend(cfg, store)
+    fakeService(backend, {
+      BindToItems: async (ids: Array<{ UniqueId?: string }>) => ({
+        Responses: ids.map((id) => ({
+          Result: 0,
+          Item: { Id: { UniqueId: id.UniqueId }, Size: 5000, HasAttachments: false },
+        })),
+      }),
+    })
+
+    const [row] = await backend.listMessages({ limit: 10 })
+    expect(row?.hasAttachments).toBe(false)
+    expect(row?.attachmentCount).toBe(0)
+    const cached = store.listMessages({ folderId: "wk:inbox", limit: 10 })[0]
+    expect(cached?.hasAttachments).toBe(false)
+    expect(cached?.attachmentCount).toBe(0)
+
+    backend.close()
+    rmSync(cfg.dataDir, { recursive: true, force: true })
+  })
+
+  test("a Warning batch does not mark metadata checked", async () => {
+    const cfg = config()
+    const store = openStore(cfg)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [{ ...message("1", ["to@example.com"]), recipientsKnown: true }])
+    freshState(store)
+
+    let binds = 0
+    const backend = new EwsBackend(cfg, store)
+    fakeService(backend, {
+      BindToItems: async () => {
+        binds++
+        return { Responses: [{ Result: 1, Item: { Id: { UniqueId: "1" }, Size: 5000 } }] }
+      },
+    })
+
+    await backend.listMessages({ limit: 10 })
+    expect(store.isMetadataChecked("1")).toBe(false)
+    await backend.listMessages({ limit: 10 })
+    expect(binds).toBe(1)
+
+    backend.close()
+    rmSync(cfg.dataDir, { recursive: true, force: true })
+  })
+
+  test("a failed recipient write is retried on the next page", async () => {
+    const cfg = config()
+    const store = openStore(cfg)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [message("1")])
+    freshState(store)
+    store.updateRecipients = () => {
+      throw new Error("SQLITE_BUSY")
+    }
+
+    let binds = 0
+    const backend = new EwsBackend(cfg, store)
+    fakeService(backend, {
+      BindToItems: async (ids: Array<{ UniqueId?: string }>) => {
+        binds++
+        return {
+          Responses: ids.map((id) => ({
+            Result: 0,
+            Item: {
+              Id: { UniqueId: id.UniqueId },
+              ToRecipients: recipients(["lazy@example.com"]),
+              CcRecipients: recipients([]),
+            },
+          })),
+        }
+      },
+    })
+
+    await backend.listMessages({ limit: 10 })
+    await backend.listMessages({ limit: 10 })
+    expect(binds).toBe(2)
+
+    backend.close()
+    rmSync(cfg.dataDir, { recursive: true, force: true })
+  })
+
+  test("a bind with HasAttachments=true and no collection drops a cached zero", async () => {
+    const cfg = config()
+    const store = openStore(cfg)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      { ...message("1", ["to@example.com"]), recipientsKnown: true, attachmentCount: 0 },
+    ])
+    freshState(store)
+
+    const backend = new EwsBackend(cfg, store)
+    fakeService(backend, {
+      BindToItems: async (ids: Array<{ UniqueId?: string }>) => ({
+        Responses: ids.map((id) => ({
+          Result: 0,
+          Item: { Id: { UniqueId: id.UniqueId }, Size: 5000, HasAttachments: true },
+        })),
+      }),
+    })
+
+    const [row] = await backend.listMessages({ limit: 10 })
+    expect(row?.hasAttachments).toBe(true)
+    expect(row?.attachmentCount).toBeUndefined()
+    const [cached] = store.listMessages({ folderId: "wk:inbox", limit: 10 })
+    expect(cached?.attachmentCount).toBeUndefined()
+    const [second] = await backend.listMessages({ limit: 10 })
+    expect(second?.attachmentCount).toBeUndefined()
+
+    backend.close()
+    rmSync(cfg.dataDir, { recursive: true, force: true })
+  })
+
+  test("a measured count survives a bind without an Attachments collection", async () => {
+    const cfg = config()
+    const store = openStore(cfg)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [
+      { ...message("1", ["to@example.com"]), recipientsKnown: true, attachmentCount: 2 },
+    ])
+    freshState(store)
+
+    const backend = new EwsBackend(cfg, store)
+    fakeService(backend, {
+      BindToItems: async (ids: Array<{ UniqueId?: string }>) => ({
+        Responses: ids.map((id) => ({
+          Result: 0,
+          Item: { Id: { UniqueId: id.UniqueId }, Size: 5000, HasAttachments: true },
+        })),
+      }),
+    })
+
+    const [row] = await backend.listMessages({ limit: 10 })
+    expect(row?.attachmentCount).toBe(2)
+    const [cached] = store.listMessages({ folderId: "wk:inbox", limit: 10 })
+    expect(cached?.attachmentCount).toBe(2)
+
+    backend.close()
+    rmSync(cfg.dataDir, { recursive: true, force: true })
+  })
+
+  test("a failed metadata write is retried on the next page", async () => {
+    const cfg = config()
+    const store = openStore(cfg)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [message("1", ["to@example.com"])])
+    freshState(store)
+    store.updateMetadata = () => {
+      throw new Error("SQLITE_BUSY")
+    }
+
+    let binds = 0
+    const backend = new EwsBackend(cfg, store)
+    fakeService(backend, {
+      BindToItems: async (ids: Array<{ UniqueId?: string }>) => {
+        binds++
+        return {
+          Responses: ids.map((id) => ({
+            Result: 0,
+            Item: { Id: { UniqueId: id.UniqueId }, Size: 777, HasAttachments: false },
+          })),
+        }
+      },
+    })
+
+    const first = await backend.listMessages({ limit: 10 })
+    expect(first[0]?.size).toBe(777)
+    expect(store.isMetadataChecked("1")).toBe(false)
+    await backend.listMessages({ limit: 10 })
+    expect(binds).toBe(2)
+
+    backend.close()
+    rmSync(cfg.dataDir, { recursive: true, force: true })
+  })
+
   test("BindToItems failure still returns the page with recipientsKnown:false", async () => {
     const cfg = config()
     const store = openStore(cfg)

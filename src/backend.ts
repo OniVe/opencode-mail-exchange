@@ -61,9 +61,12 @@ const CONTACT_PROPERTY_SET = new PropertySet(BasePropertySet.FirstClassPropertie
 ])
 
 /** Recipients are not part of `SYNC_PROPERTY_SET`, so cached pages bind them in one batch. */
-const RECIPIENT_PROPERTY_SET = new PropertySet(BasePropertySet.IdOnly, [
+const DETAILS_PROPERTY_SET = new PropertySet(BasePropertySet.IdOnly, [
   EmailMessageSchema.ToRecipients,
   EmailMessageSchema.CcRecipients,
+  ItemSchema.Size,
+  ItemSchema.HasAttachments,
+  ItemSchema.Attachments,
 ])
 
 const MAX_ATTACHMENTS = 10
@@ -344,7 +347,7 @@ export class EwsBackend implements MailBackend {
     if (this.store && MAIL_FOLDERS.has(key)) {
       await this.ensureFresh(input.folder)
       const cached = this.store.listMessages({ folderId: key, limit: input.limit, offset: input.offset ?? 0 })
-      if (cached.length > 0) return this.withRecipients(cached)
+      if (cached.length > 0) return this.withDetails(cached)
     }
 
     const folderId = await resolveFolderId(this.service, input.folder)
@@ -372,10 +375,10 @@ export class EwsBackend implements MailBackend {
     const query = escapeXml(input.query.trim())
     // A query made only of whitespace/controls/non-characters cannot be sent: the SOAP
     // element would have no value (or a blank one). There is nothing to search for.
-    if (query === "") return this.withRecipients(local)
+    if (query === "") return this.withDetails(local)
     // An impossible date-time ("2026-10-23T10:00:60") has no local results; sending the
     // raw string to EWS could return a literal match, so skip the remote half too.
-    if (isImpossibleDateQuery(input.query)) return this.withRecipients(local)
+    if (isImpossibleDateQuery(input.query)) return this.withDetails(local)
     let remote: MessageSummary[] = []
     try {
       const filter = new SearchFilter.SearchFilterCollection(LogicalOperator.Or, [
@@ -405,7 +408,7 @@ export class EwsBackend implements MailBackend {
       console.warn(`[mail.exchange] EWS search failed; returning local FTS results: ${String(error)}`)
     }
 
-    return this.withRecipients(mergeSearchResults(local, remote, input.limit))
+    return this.withDetails(mergeSearchResults(local, remote, input.limit))
   }
 
   async getMessage(input: { id: string }): Promise<MessageDetail> {
@@ -420,6 +423,7 @@ export class EwsBackend implements MailBackend {
     const bodyType = bodyTypeOf(message.Body?.BodyType)
     const summary = toSummary(message, undefined, true, true)
     const cc = addressList(message.CcRecipients)
+    const rawHasAttachments = safe(() => message.HasAttachments, undefined)
 
     let bodyCached = false
     if (this.store && this.config.storage === "full") {
@@ -429,7 +433,14 @@ export class EwsBackend implements MailBackend {
     // Recipients are not part of the sync property set; keep the cached row in sync.
     this.persistRecipients(id, summary.to, cc)
     // `mail_get` is a bind: size and attachment count are now known even if sync omitted them.
-    this.persistMetadata(id, { size: summary.size, attachmentCount: summary.attachmentCount })
+    const clearDerivedZero =
+      rawHasAttachments === true && summary.attachmentCount === undefined && cached?.attachmentCount === 0
+    const metadataPersisted = this.persistMetadata(id, {
+      size: summary.size,
+      attachmentCount: clearDerivedZero ? null : summary.attachmentCount,
+      hasAttachments: typeof rawHasAttachments === "boolean" ? rawHasAttachments : undefined,
+    })
+    if (metadataPersisted) this.markMetadataChecked([id])
 
     return { ...summary, cc, body, bodyType, truncated, fetched: true, bodyCached }
   }
@@ -624,22 +635,48 @@ export class EwsBackend implements MailBackend {
     }
   }
 
-  private persistMetadata(id: string, input: { size?: number; attachmentCount?: number }): void {
+  private persistMetadata(
+    id: string,
+    input: { size?: number; attachmentCount?: number | null; hasAttachments?: boolean },
+  ): boolean {
     try {
       this.store?.updateMetadata(id, input)
+      return true
     } catch (error) {
       console.warn(`[mail.exchange] ${this.config.id}: could not cache metadata for ${id}: ${errorText(error)}`)
+      return false
+    }
+  }
+
+  private markMetadataChecked(ids: string[]): void {
+    try {
+      this.store?.markMetadataChecked(ids)
+    } catch (error) {
+      console.warn(`[mail.exchange] ${this.config.id}: could not mark metadata checked: ${errorText(error)}`)
     }
   }
 
   /**
-   * Fill recipients for a cached page in one `BindToItems` call. Failures are non-fatal:
-   * the page is still returned, just with `recipientsKnown: false` for the unbound rows.
+   * Fill recipients and missing size/attachment count for a cached page in one
+   * `BindToItems` call. The request is IdOnly + To/Cc + Size/HasAttachments/Attachments;
+   * Body is not requested. Failures are non-fatal: unknown fields stay unknown.
    */
-  private async withRecipients(page: MessageSummary[]): Promise<MessageSummary[]> {
+  private async withDetails(page: MessageSummary[]): Promise<MessageSummary[]> {
     const store = this.store
     if (!store) return page
-    const pending = page.filter((message) => message.recipientsKnown !== true && message.id !== "")
+    const needsMetadata = (message: MessageSummary): boolean =>
+      message.size === undefined || (message.hasAttachments && message.attachmentCount === undefined)
+    let pending: MessageSummary[]
+    try {
+      pending = page.filter(
+        (message) =>
+          message.id !== "" &&
+          (message.recipientsKnown !== true || (needsMetadata(message) && !store.isMetadataChecked(message.id))),
+      )
+    } catch (error) {
+      console.warn(`[mail.exchange] ${this.config.id}: metadata state read failed: ${errorText(error)}`)
+      return page
+    }
     if (pending.length === 0) return page
 
     const envelopeOnly = (): MessageSummary[] =>
@@ -650,7 +687,7 @@ export class EwsBackend implements MailBackend {
     const budget = this.enrichmentBudgetMs()
     const bind = this.service.BindToItems(
       pending.map((message) => new ItemId(message.id)),
-      RECIPIENT_PROPERTY_SET,
+      DETAILS_PROPERTY_SET,
     )
     // The raced-out request may still settle later; its rejection is already accounted for.
     bind.catch(() => {})
@@ -665,43 +702,85 @@ export class EwsBackend implements MailBackend {
       if (bound === undefined) {
         this.enrichmentBlockedUntil = Date.now() + ENRICHMENT_COOLDOWN_MS
         console.warn(
-          `[mail.exchange] ${this.config.id}: recipient enrichment overran ${budget} ms, returning envelope only`,
+          `[mail.exchange] ${this.config.id}: detail enrichment overran ${budget} ms, returning envelope only`,
         )
         return envelopeOnly()
       }
       responses = bound.Responses ?? []
     } catch (error) {
+      this.enrichmentBlockedUntil = Date.now() + ENRICHMENT_COOLDOWN_MS
       console.warn(
-        `[mail.exchange] ${this.config.id}: recipient enrichment failed, returning envelope only: ${errorText(error)}`,
+        `[mail.exchange] ${this.config.id}: detail enrichment failed, returning envelope only: ${errorText(error)}`,
       )
       return envelopeOnly()
     } finally {
       if (timer !== undefined) clearTimeout(timer)
     }
 
-    const fresh = new Map<string, { to: string[]; cc: string[] }>()
+    const fresh = new Map<
+      string,
+      { to: string[]; cc: string[]; size?: number; attachmentCount?: number; hasAttachments?: boolean }
+    >()
+    const successIds = new Set<string>()
     for (const response of responses) {
-      if (response.Result !== ServiceResult.Success && response.Result !== ServiceResult.Warning) continue
-      const item = response.Item as
-        | { Id?: { UniqueId?: string }; ToRecipients?: unknown; CcRecipients?: unknown }
-        | undefined
-      const id = safe(() => item?.Id?.UniqueId ?? "", "")
-      if (!id) continue
-      fresh.set(id, {
-        to: safe(() => addressList(item?.ToRecipients), []),
-        cc: safe(() => addressList(item?.CcRecipients), []),
+      // Warning may be an unprocessed stub; only Success proves the properties were read.
+      if (response.Result !== ServiceResult.Success) continue
+      const item = response.Item
+      const details = toSummary(item, undefined, true, true)
+      if (!details.id) continue
+      const rawHasAttachments = safe(
+        () => (item as { HasAttachments?: boolean } | undefined)?.HasAttachments,
+        undefined,
+      )
+      successIds.add(details.id)
+      fresh.set(details.id, {
+        to: details.to,
+        cc: details.cc ?? [],
+        size: details.size,
+        attachmentCount: details.attachmentCount,
+        hasAttachments: typeof rawHasAttachments === "boolean" ? rawHasAttachments : undefined,
       })
     }
+    // Only confirmed items count as checked; an Error/empty batch is retried after cooldown.
+    if (successIds.size < pending.length) {
+      this.enrichmentBlockedUntil = Date.now() + ENRICHMENT_COOLDOWN_MS
+    }
 
-    return page.map((message) => {
+    const checkedIds: string[] = []
+    const enrichedPage = page.map((message) => {
       const found = fresh.get(message.id)
       if (!found) return message.recipientsKnown === true ? message : { ...message, recipientsKnown: false }
-      this.persistRecipients(message.id, found.to, found.cc)
-      const enriched: MessageSummary = { ...message, to: found.to, recipientsKnown: true }
-      if (found.cc.length > 0) enriched.cc = found.cc
-      else delete enriched.cc
+      const recipientsUnknown = message.recipientsKnown !== true
+      if (recipientsUnknown) this.persistRecipients(message.id, found.to, found.cc)
+      const clearDerivedZero =
+        found.hasAttachments === true && found.attachmentCount === undefined && message.attachmentCount === 0
+      if (
+        this.persistMetadata(message.id, {
+          size: found.size,
+          attachmentCount: clearDerivedZero ? null : found.attachmentCount,
+          hasAttachments: found.hasAttachments,
+        })
+      ) {
+        checkedIds.push(message.id)
+      }
+      const enriched: MessageSummary = { ...message }
+      if (recipientsUnknown) {
+        enriched.to = found.to
+        enriched.recipientsKnown = true
+        if (found.cc.length > 0) enriched.cc = found.cc
+        else delete enriched.cc
+      }
+      if (found.size !== undefined) enriched.size = found.size
+      if (found.attachmentCount !== undefined) enriched.attachmentCount = found.attachmentCount
+      if (found.hasAttachments !== undefined) {
+        enriched.hasAttachments = found.hasAttachments
+        // A positive flag without a loaded Attachments collection must not keep a derived 0.
+        if (clearDerivedZero) delete enriched.attachmentCount
+      }
       return enriched
     })
+    this.markMetadataChecked(checkedIds)
+    return enrichedPage
   }
 
   private async runSync(folder: string, key: string, store: Store): Promise<SyncResult> {

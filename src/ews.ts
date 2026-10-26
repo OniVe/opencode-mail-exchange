@@ -154,15 +154,15 @@ export function toSummary(
   }
   if (attachmentsKnown) {
     const count = safe(() => typed.Attachments?.Count, undefined)
-    if (typeof count === "number" && Number.isInteger(count) && count >= 0 && count <= MAX_ITEM_SIZE) {
+    if (hasAttachmentsFlag === false && (count === undefined || count === 0)) {
+      summary.attachmentCount = 0
+    } else if (typeof count === "number" && Number.isInteger(count) && count >= 0 && count <= MAX_ITEM_SIZE) {
       if (hasAttachmentsFlag === true && count > 0) {
         summary.attachmentCount = count
       } else if (hasAttachmentsFlag === undefined && count > 0) {
         // The flag is missing but a positive count is evidence of attachments.
         summary.hasAttachments = true
         summary.attachmentCount = count
-      } else if (hasAttachmentsFlag === false && count === 0) {
-        summary.attachmentCount = 0
       }
     }
   }
