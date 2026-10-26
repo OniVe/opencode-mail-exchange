@@ -299,7 +299,7 @@ export class EwsBackend implements MailBackend {
   private readonly service: ReturnType<typeof createEwsService>
   private readonly inflight = new Map<string, Promise<SyncResult>>()
   /** After one enrichment overruns its budget, pages are served envelope-only for a minute. */
-  private enrichmentBlockedUntil = 0
+  private readonly enrichmentBlockedUntil = new Map<string, number>()
 
   constructor(
     private readonly config: MailConfig,
@@ -347,7 +347,7 @@ export class EwsBackend implements MailBackend {
     if (this.store && MAIL_FOLDERS.has(key)) {
       await this.ensureFresh(input.folder)
       const cached = this.store.listMessages({ folderId: key, limit: input.limit, offset: input.offset ?? 0 })
-      if (cached.length > 0) return this.withDetails(cached)
+      if (cached.length > 0) return this.withDetails(cached, key)
     }
 
     const folderId = await resolveFolderId(this.service, input.folder)
@@ -375,10 +375,10 @@ export class EwsBackend implements MailBackend {
     const query = escapeXml(input.query.trim())
     // A query made only of whitespace/controls/non-characters cannot be sent: the SOAP
     // element would have no value (or a blank one). There is nothing to search for.
-    if (query === "") return this.withDetails(local)
+    if (query === "") return this.withDetails(local, "search")
     // An impossible date-time ("2026-10-23T10:00:60") has no local results; sending the
     // raw string to EWS could return a literal match, so skip the remote half too.
-    if (isImpossibleDateQuery(input.query)) return this.withDetails(local)
+    if (isImpossibleDateQuery(input.query)) return this.withDetails(local, "search")
     let remote: MessageSummary[] = []
     try {
       const filter = new SearchFilter.SearchFilterCollection(LogicalOperator.Or, [
@@ -408,7 +408,7 @@ export class EwsBackend implements MailBackend {
       console.warn(`[mail.exchange] EWS search failed; returning local FTS results: ${String(error)}`)
     }
 
-    return this.withDetails(mergeSearchResults(local, remote, input.limit))
+    return this.withDetails(mergeSearchResults(local, remote, input.limit), "search")
   }
 
   async getMessage(input: { id: string }): Promise<MessageDetail> {
@@ -424,6 +424,9 @@ export class EwsBackend implements MailBackend {
     const summary = toSummary(message, undefined, true, true)
     const cc = addressList(message.CcRecipients)
     const rawHasAttachments = safe(() => message.HasAttachments, undefined)
+    if (typeof rawHasAttachments === "boolean") summary.hasAttachments = rawHasAttachments
+    else if (summary.attachmentCount !== undefined && summary.attachmentCount > 0) summary.hasAttachments = true
+    else if (cached?.hasAttachments !== undefined) summary.hasAttachments = cached.hasAttachments
 
     let bodyCached = false
     if (this.store && this.config.storage === "full") {
@@ -435,10 +438,16 @@ export class EwsBackend implements MailBackend {
     // `mail_get` is a bind: size and attachment count are now known even if sync omitted them.
     const clearDerivedZero =
       rawHasAttachments === true && summary.attachmentCount === undefined && cached?.attachmentCount === 0
+    const persistedHasAttachments =
+      typeof rawHasAttachments === "boolean"
+        ? rawHasAttachments
+        : summary.hasAttachments && summary.attachmentCount !== undefined
+          ? true
+          : undefined
     const metadataPersisted = this.persistMetadata(id, {
       size: summary.size,
       attachmentCount: clearDerivedZero ? null : summary.attachmentCount,
-      hasAttachments: typeof rawHasAttachments === "boolean" ? rawHasAttachments : undefined,
+      hasAttachments: persistedHasAttachments,
     })
     if (metadataPersisted) this.markMetadataChecked([id])
 
@@ -661,7 +670,7 @@ export class EwsBackend implements MailBackend {
    * `BindToItems` call. The request is IdOnly + To/Cc + Size/HasAttachments/Attachments;
    * Body is not requested. Failures are non-fatal: unknown fields stay unknown.
    */
-  private async withDetails(page: MessageSummary[]): Promise<MessageSummary[]> {
+  private async withDetails(page: MessageSummary[], key: string): Promise<MessageSummary[]> {
     const store = this.store
     if (!store) return page
     const needsMetadata = (message: MessageSummary): boolean =>
@@ -682,7 +691,7 @@ export class EwsBackend implements MailBackend {
     const envelopeOnly = (): MessageSummary[] =>
       page.map((message) => (message.recipientsKnown === true ? message : { ...message, recipientsKnown: false }))
     // A previous bind overran its budget: serve the envelope instead of stalling again.
-    if (Date.now() < this.enrichmentBlockedUntil) return envelopeOnly()
+    if (Date.now() < (this.enrichmentBlockedUntil.get(key) ?? 0)) return envelopeOnly()
 
     const budget = this.enrichmentBudgetMs()
     const bind = this.service.BindToItems(
@@ -700,7 +709,7 @@ export class EwsBackend implements MailBackend {
     try {
       const bound = await Promise.race([bind, expired])
       if (bound === undefined) {
-        this.enrichmentBlockedUntil = Date.now() + ENRICHMENT_COOLDOWN_MS
+        this.enrichmentBlockedUntil.set(key, Date.now() + ENRICHMENT_COOLDOWN_MS)
         console.warn(
           `[mail.exchange] ${this.config.id}: detail enrichment overran ${budget} ms, returning envelope only`,
         )
@@ -708,7 +717,7 @@ export class EwsBackend implements MailBackend {
       }
       responses = bound.Responses ?? []
     } catch (error) {
-      this.enrichmentBlockedUntil = Date.now() + ENRICHMENT_COOLDOWN_MS
+      this.enrichmentBlockedUntil.set(key, Date.now() + ENRICHMENT_COOLDOWN_MS)
       console.warn(
         `[mail.exchange] ${this.config.id}: detail enrichment failed, returning envelope only: ${errorText(error)}`,
       )
@@ -743,7 +752,7 @@ export class EwsBackend implements MailBackend {
     }
     // Only confirmed items count as checked; an Error/empty batch is retried after cooldown.
     if (successIds.size < pending.length) {
-      this.enrichmentBlockedUntil = Date.now() + ENRICHMENT_COOLDOWN_MS
+      this.enrichmentBlockedUntil.set(key, Date.now() + ENRICHMENT_COOLDOWN_MS)
     }
 
     const checkedIds: string[] = []

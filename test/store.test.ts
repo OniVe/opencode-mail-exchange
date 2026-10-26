@@ -451,8 +451,13 @@ describe("store", () => {
     expect(after?.attachmentCount).toBeUndefined()
 
     store.updateMetadata("bad", { attachmentCount: 2_147_483_648 })
-    const [tooMany] = store.listMessages({ folderId: "wk:inbox", limit: 10 })
+    const tooMany = store.listMessages({ folderId: "wk:inbox", limit: 10 })[0]
     expect(tooMany?.attachmentCount).toBeUndefined()
+
+    store.updateMetadata("bad", { hasAttachments: true, attachmentCount: 0 })
+    expect(store.listMessages({ folderId: "wk:inbox", limit: 10 })[0]?.attachmentCount).toBeUndefined()
+    store.updateMetadata("bad", { hasAttachments: false, attachmentCount: 2 })
+    expect(store.listMessages({ folderId: "wk:inbox", limit: 10 })[0]?.attachmentCount).toBe(0)
 
     const db = new Database(path.join(config.dataDir, "mail.db"))
     const stored = db.query("select size, attachment_count from messages where id = 'bad'").get() as {
@@ -482,6 +487,22 @@ describe("store", () => {
     const [row] = store.listMessages({ folderId: "wk:inbox", limit: 10 })
     expect(row?.hasAttachments).toBe(false)
     expect(row?.attachmentCount).toBe(0)
+
+    store.close()
+    rmSync(config.dataDir, { recursive: true, force: true })
+  })
+
+  test("a sync upsert resets metadata_checked", () => {
+    const config = baseConfig()
+    const store = openStore(config)
+    if (!store) throw new Error("store expected")
+
+    store.upsertMessages("wk:inbox", [message("1", "Subject", "2026-10-23T09:41:32Z")])
+    store.markMetadataChecked(["1"])
+    expect(store.isMetadataChecked("1")).toBe(true)
+
+    store.upsertMessages("wk:inbox", [message("1", "Subject v2", "2026-10-23T09:41:32Z")])
+    expect(store.isMetadataChecked("1")).toBe(false)
 
     store.close()
     rmSync(config.dataDir, { recursive: true, force: true })

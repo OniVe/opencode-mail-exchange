@@ -672,6 +672,9 @@ const normalizeAttachmentCount = (value: unknown): number | null =>
 
 const rowToSummary = (row: MessageRow): MessageSummary => {
   const cc = splitAddresses(row.cc_addrs)
+  const hasAttachments = row.has_attachments === 1
+  const count = normalizeAttachmentCount(row.attachment_count)
+  const attachmentCount = hasAttachments ? (count === 0 ? undefined : (count ?? undefined)) : 0
   const summary: MessageSummary = {
     id: row.id,
     subject: row.subject,
@@ -682,11 +685,9 @@ const rowToSummary = (row: MessageRow): MessageSummary => {
     recipientsKnown: row.recipients_fetched === 1 || row.to_addrs !== "" || row.cc_addrs !== "",
     received: row.received,
     isRead: row.is_read === 1,
-    hasAttachments: row.has_attachments === 1,
+    hasAttachments,
     size: normalizeSize(row.size) ?? undefined,
-    attachmentCount:
-      normalizeAttachmentCount(row.attachment_count) ??
-      (row.attachment_count === null && row.has_attachments === 0 ? 0 : undefined),
+    attachmentCount,
     preview: row.preview,
     conversationId: row.conversation_id ?? undefined,
     folderId: row.folder_id ?? undefined,
@@ -846,12 +847,19 @@ export function openStore(config: MailConfig): Store | undefined {
   ): void => {
     const size = normalizeSize(input.size)
     const clearAttachmentCount = input.attachmentCount === null
-    const attachmentCount = clearAttachmentCount ? null : normalizeAttachmentCount(input.attachmentCount)
+    let attachmentCount = clearAttachmentCount ? null : normalizeAttachmentCount(input.attachmentCount)
     const hasAttachments = typeof input.hasAttachments === "boolean" ? (input.hasAttachments ? 1 : 0) : null
-    if (size === null && attachmentCount === null && hasAttachments === null && !clearAttachmentCount) return
+    let clearCount = clearAttachmentCount
+    if (hasAttachments === 1 && attachmentCount === 0) clearCount = true
+    if (hasAttachments === 0 && attachmentCount !== null && attachmentCount > 0) {
+      // A direct caller supplied a contradictory pair; keep the count unknown.
+      attachmentCount = null
+      clearCount = true
+    }
+    if (size === null && attachmentCount === null && hasAttachments === null && !clearCount) return
     db.query(
       "update messages set size = coalesce(?, size), attachment_count = case when ? then null else coalesce(?, attachment_count) end, has_attachments = coalesce(?, has_attachments), updated_ts = ? where id = ? and deleted = 0",
-    ).run(size, clearAttachmentCount ? 1 : 0, attachmentCount, hasAttachments, Date.now(), id)
+    ).run(size, clearCount ? 1 : 0, attachmentCount, hasAttachments, Date.now(), id)
   }
 
   const metadataChecked = db.query(

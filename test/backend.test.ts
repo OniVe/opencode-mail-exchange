@@ -261,6 +261,39 @@ describe("message size and attachments", () => {
     backend.close()
   })
 
+  test("mail_get keeps cached hasAttachments when the raw flag is unloaded", async () => {
+    const cfg = config()
+    const store = openStore(cfg)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [{ ...message("1"), hasAttachments: true, attachmentCount: 2 }])
+    const backend = new EwsBackend(cfg, store)
+    ;(backend as unknown as { service: unknown }).service = {
+      BindToItem: async () => ({
+        Id: { UniqueId: "1" },
+        Subject: "Unloaded flag",
+        From: { Address: "alice@example.com" },
+        ToRecipients: { GetEnumerator: () => [{ Address: "to@example.com" }] },
+        CcRecipients: { GetEnumerator: () => [] },
+        DateTimeReceived: { ToISOString: () => "2026-10-23T09:41:32Z" },
+        IsRead: false,
+        Size: 5000,
+        Attachments: { Count: 2 },
+        Preview: "preview",
+        Body: { Text: "body", BodyType: 0 },
+      }),
+    }
+
+    const detail = await backend.getMessage({ id: "1" })
+    expect(detail.hasAttachments).toBe(true)
+    expect(detail.attachmentCount).toBe(2)
+    const [cached] = store.listMessages({ folderId: "wk:inbox", limit: 10 })
+    expect(cached?.hasAttachments).toBe(true)
+    expect(cached?.attachmentCount).toBe(2)
+
+    backend.close()
+    rmSync(cfg.dataDir, { recursive: true, force: true })
+  })
+
   test("a metadata cache failure does not fail mail_get", async () => {
     const cfg = config()
     const store = openStore(cfg)
@@ -291,6 +324,7 @@ describe("message size and attachments", () => {
     expect(detail.subject).toBe("Still readable")
     expect(detail.size).toBe(4321)
     expect(detail.attachmentCount).toBe(1)
+    expect(store.isMetadataChecked("1")).toBe(false)
 
     backend.close()
     rmSync(cfg.dataDir, { recursive: true, force: true })

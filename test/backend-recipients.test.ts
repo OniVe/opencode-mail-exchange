@@ -386,7 +386,7 @@ describe("cached recipients", () => {
     const store = openStore(cfg)
     if (!store) throw new Error("store expected")
     store.upsertMessages("wk:inbox", [
-      { ...message("1", ["to@example.com"]), recipientsKnown: true, attachmentCount: 2 },
+      { ...message("1", ["to@example.com"]), recipientsKnown: true, hasAttachments: true, attachmentCount: 2 },
     ])
     freshState(store)
 
@@ -437,6 +437,40 @@ describe("cached recipients", () => {
     expect(first[0]?.size).toBe(777)
     expect(store.isMetadataChecked("1")).toBe(false)
     await backend.listMessages({ limit: 10 })
+    expect(binds).toBe(2)
+
+    backend.close()
+    rmSync(cfg.dataDir, { recursive: true, force: true })
+  })
+
+  test("the cooldown is isolated per folder", async () => {
+    const cfg = config()
+    const store = openStore(cfg)
+    if (!store) throw new Error("store expected")
+    store.upsertMessages("wk:inbox", [message("1", ["to@example.com"])])
+    store.upsertMessages("wk:sent", [message("2", ["to@example.com"])])
+    freshState(store)
+    store.setSyncState("wk:sent", "state")
+
+    let binds = 0
+    const backend = new EwsBackend(cfg, store)
+    fakeService(backend, {
+      BindToItems: async (ids: Array<{ UniqueId?: string }>) => {
+        binds++
+        return {
+          Responses: ids.map((id) =>
+            id.UniqueId === "1"
+              ? { Result: 2 }
+              : { Result: 0, Item: { Id: { UniqueId: id.UniqueId }, Size: 777, HasAttachments: false } },
+          ),
+        }
+      },
+    })
+
+    const inbox = await backend.listMessages({ folder: "inbox", limit: 10 })
+    expect(inbox[0]?.size).toBeUndefined()
+    const sent = await backend.listMessages({ folder: "sent", limit: 10 })
+    expect(sent[0]?.size).toBe(777)
     expect(binds).toBe(2)
 
     backend.close()
