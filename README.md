@@ -42,7 +42,7 @@ Reads and sends mail, lists calendar events and contacts from an on-prem Exchang
 NTLM. Runs inside OpenCode V2 as a native TypeScript plugin: Bun executes `src/index.ts` directly, no build step.
 
 Verified on Exchange 2016 (build 15.1.2507.6), NTLMv2, internal CA. Bun 1.4.2, `@opencode/plugin` 2.0.26,
-169 tests.
+173 tests.
 
 ## Features
 

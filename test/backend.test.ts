@@ -470,6 +470,108 @@ describe("getMessage cache", () => {
   })
 })
 
+describe("calendar and contacts batch failures", () => {
+  test("calendar returns the FindAppointments envelope when the load throws", async () => {
+    const cfg = config()
+    const backend = new EwsBackend(cfg)
+    ;(backend as unknown as { service: unknown }).service = {
+      FindAppointments: async () => ({
+        Items: [
+          {
+            Id: { UniqueId: "e1" },
+            Subject: "Envelope event",
+            Start: { ToISOString: () => "2026-10-23T10:00:00Z" },
+            End: { ToISOString: () => "2026-10-23T11:00:00Z" },
+            Location: "Room",
+            IsAllDayEvent: false,
+            Organizer: { Address: "owner@example.com" },
+          },
+        ],
+      }),
+      LoadPropertiesForItems: async () => {
+        throw new Error("batch failed")
+      },
+    }
+
+    const events = await backend.listCalendar({ limit: 10 })
+    expect(events.map((event) => event.id)).toEqual(["e1"])
+    expect(events[0]?.subject).toBe("Envelope event")
+    backend.close()
+  })
+
+  test("contacts drops per-item load errors", async () => {
+    const cfg = config()
+    const backend = new EwsBackend(cfg)
+    const contact = (id: string, name: string) => ({
+      Id: { UniqueId: id },
+      DisplayName: name,
+      CompanyName: "Example",
+      EmailAddresses: { GetEnumerator: () => [{ Address: `${id}@example.com` }] },
+    })
+    ;(backend as unknown as { service: unknown }).service = {
+      FindItems: async () => ({ Items: [contact("a", "Alice"), contact("b", "Bob")] }),
+      LoadPropertiesForItems: async () => ({
+        Responses: [{ Result: ServiceResult.Success }, { Result: ServiceResult.Error }],
+      }),
+    }
+
+    const contacts = await backend.listContacts({ limit: 10 })
+    expect(contacts.map((entry) => entry.id)).toEqual(["a"])
+    backend.close()
+  })
+  test("contacts safe-read throwing properties", async () => {
+    const cfg = config()
+    const backend = new EwsBackend(cfg)
+    ;(backend as unknown as { service: unknown }).service = {
+      FindItems: async () => ({
+        Items: [
+          {
+            Id: { UniqueId: "a" },
+            get DisplayName(): string {
+              throw new Error("unloaded")
+            },
+            CompanyName: "Example",
+            EmailAddresses: { GetEnumerator: () => [] },
+          },
+        ],
+      }),
+      LoadPropertiesForItems: async () => ({ Responses: [{ Result: ServiceResult.Success }] }),
+    }
+
+    const contacts = await backend.listContacts({ limit: 10 })
+    expect(contacts).toEqual([{ id: "a", displayName: "", company: "Example", email: "" }])
+    backend.close()
+  })
+
+  test("calendar safe-read throwing properties", async () => {
+    const cfg = config()
+    const backend = new EwsBackend(cfg)
+    ;(backend as unknown as { service: unknown }).service = {
+      FindAppointments: async () => ({
+        Items: [
+          {
+            Id: { UniqueId: "e1" },
+            Subject: "Event",
+            get Start(): unknown {
+              throw new Error("unloaded")
+            },
+            End: { ToISOString: () => "2026-10-23T11:00:00Z" },
+            Location: "Room",
+            IsAllDayEvent: false,
+            Organizer: { Address: "owner@example.com" },
+          },
+        ],
+      }),
+      LoadPropertiesForItems: async () => ({ Responses: [{ Result: ServiceResult.Success }] }),
+    }
+
+    const events = await backend.listCalendar({ limit: 10 })
+    expect(events[0]?.start).toBe("")
+    expect(events[0]?.subject).toBe("Event")
+    backend.close()
+  })
+})
+
 describe("search serialization", () => {
   test("an ampersand in the query reaches EWS escaped, not raw", async () => {
     const cfg = config()

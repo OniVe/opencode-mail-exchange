@@ -60,6 +60,8 @@ const CONTACT_PROPERTY_SET = new PropertySet(BasePropertySet.FirstClassPropertie
   ContactSchema.CompanyName,
 ])
 
+const CALENDAR_PROPERTY_SET = new PropertySet(BasePropertySet.FirstClassProperties)
+
 /** Recipients are not part of `SYNC_PROPERTY_SET`, so cached pages bind them in one batch. */
 const DETAILS_PROPERTY_SET = new PropertySet(BasePropertySet.IdOnly, [
   EmailMessageSchema.ToRecipients,
@@ -558,6 +560,17 @@ export class EwsBackend implements MailBackend {
     return { id: message.Id?.UniqueId ?? "" }
   }
 
+  private async loadPageProperties<T>(items: T[], propertySet: PropertySet, label: string): Promise<T[]> {
+    if (items.length === 0) return items
+    try {
+      const loaded = await this.service.LoadPropertiesForItems(items as never[], propertySet)
+      return dropFailedLoads(items, loaded?.Responses)
+    } catch (error) {
+      console.warn(`[mail.exchange] ${this.config.id}: ${label} property load failed: ${errorText(error)}`)
+      return items
+    }
+  }
+
   async listCalendar(input: { from?: string; to?: string; limit: number }): Promise<CalendarEvent[]> {
     const start = input.from ? DateTime.Parse(input.from) : DateTime.Now
     const end = input.to ? DateTime.Parse(input.to) : start.AddDays(14)
@@ -565,17 +578,15 @@ export class EwsBackend implements MailBackend {
       WellKnownFolderName.Calendar,
       new CalendarView(start, end, input.limit),
     )
-    if (result.Items.length > 0) {
-      await this.service.LoadPropertiesForItems(result.Items, new PropertySet(BasePropertySet.FirstClassProperties))
-    }
-    return result.Items.map((appointment) => ({
-      id: appointment.Id?.UniqueId ?? "",
-      subject: appointment.Subject ?? "",
-      start: iso(appointment.Start),
-      end: iso(appointment.End),
-      location: appointment.Location ?? "",
-      isAllDay: appointment.IsAllDayEvent === true,
-      organizer: address(appointment.Organizer),
+    const items = await this.loadPageProperties(result.Items, CALENDAR_PROPERTY_SET, "calendar")
+    return items.map((appointment) => ({
+      id: safe(() => appointment.Id?.UniqueId ?? "", ""),
+      subject: safe(() => appointment.Subject ?? "", ""),
+      start: safe(() => iso(appointment.Start), ""),
+      end: safe(() => iso(appointment.End), ""),
+      location: safe(() => appointment.Location ?? "", ""),
+      isAllDay: safe(() => appointment.IsAllDayEvent === true, false),
+      organizer: safe(() => address(appointment.Organizer), ""),
     }))
   }
 
@@ -588,17 +599,17 @@ export class EwsBackend implements MailBackend {
         EmailAddresses?: { GetEnumerator?: () => Array<{ Address?: string }> }
       }
       return {
-        id: typed.Id?.UniqueId ?? "",
-        displayName: typed.DisplayName ?? "",
-        company: typed.CompanyName ?? "",
-        email: typed.EmailAddresses?.GetEnumerator?.()[0]?.Address ?? "",
+        id: safe(() => typed.Id?.UniqueId ?? "", ""),
+        displayName: safe(() => typed.DisplayName ?? "", ""),
+        company: safe(() => typed.CompanyName ?? "", ""),
+        email: safe(() => typed.EmailAddresses?.GetEnumerator?.()[0]?.Address ?? "", ""),
       }
     }
     const query = input.query?.toLowerCase()
     if (!query) {
       const page = await this.service.FindItems(WellKnownFolderName.Contacts, new ItemView(input.limit))
-      if (page.Items.length > 0) await this.service.LoadPropertiesForItems(page.Items, CONTACT_PROPERTY_SET)
-      return page.Items.map(map)
+      const items = await this.loadPageProperties(page.Items, CONTACT_PROPERTY_SET, "contacts")
+      return items.map(map)
     }
 
     // EWS cannot filter on EmailAddresses, so scan pages (bounded) and filter locally
@@ -612,8 +623,8 @@ export class EwsBackend implements MailBackend {
       const size = Math.min(pageSize, maxScan - offset)
       const page = await this.service.FindItems(WellKnownFolderName.Contacts, new ItemView(size, offset))
       if (page.Items.length === 0) break
-      await this.service.LoadPropertiesForItems(page.Items, CONTACT_PROPERTY_SET)
-      for (const contact of page.Items.map(map)) {
+      const items = await this.loadPageProperties(page.Items, CONTACT_PROPERTY_SET, "contacts")
+      for (const contact of items.map(map)) {
         if (`${contact.displayName} ${contact.email}`.toLowerCase().includes(query)) matches.push(contact)
         if (matches.length >= input.limit) return matches
       }
@@ -747,7 +758,12 @@ export class EwsBackend implements MailBackend {
         cc: details.cc ?? [],
         size: details.size,
         attachmentCount: details.attachmentCount,
-        hasAttachments: typeof rawHasAttachments === "boolean" ? rawHasAttachments : undefined,
+        hasAttachments:
+          typeof rawHasAttachments === "boolean"
+            ? rawHasAttachments
+            : details.attachmentCount !== undefined && details.attachmentCount > 0
+              ? true
+              : undefined,
       })
     }
     // Only confirmed items count as checked; an Error/empty batch is retried after cooldown.
