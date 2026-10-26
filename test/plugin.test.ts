@@ -38,7 +38,7 @@ describe("plugin setup", () => {
     } as unknown as Plugin.Context
 
     const cleanup = await plugin.setup(ctx)
-    expect(tools).toHaveLength(10)
+    expect(tools).toHaveLength(12)
     expect(tools).toContain("send")
     expect(typeof cleanup).toBe("function")
     if (typeof cleanup === "function") await cleanup()

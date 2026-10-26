@@ -5,6 +5,8 @@ import type { MailService } from "../src/service"
 import { registerTools } from "../src/tools"
 import type { MailBackend } from "../src/types"
 
+let lastDelete: { ids: string[]; hard?: boolean } | undefined
+
 const backend: MailBackend = {
   listFolders: async () => [{ id: "1", name: "Inbox", unread: 2, total: 3 }],
   syncFolder: async () => ({ synced: 1, complete: true }),
@@ -38,6 +40,11 @@ const backend: MailBackend = {
   }),
   send: async () => ({ sent: true }),
   saveDraft: async () => ({ id: "draft" }),
+  deleteMessages: async (input) => {
+    lastDelete = { ids: input.ids, hard: input.hard }
+    return { deleted: input.ids.length, mode: input.hard ? "hard" : "soft" }
+  },
+  emptyDeleted: async () => ({ emptied: true }),
   listCalendar: async () => [],
   listContacts: async () => [],
   close: () => {},
@@ -99,6 +106,8 @@ describe("registerTools", () => {
       "list",
       "search",
       "get",
+      "delete",
+      "empty_deleted",
       "sync",
       "draft",
       "send",
@@ -119,6 +128,20 @@ describe("registerTools", () => {
     expect((await search?.execute({ query: "a".repeat(512) }))?.content).toContain("[]")
     expect((await search?.execute({ query: "a".repeat(513) }))?.content).toContain("query is too long")
     expect((await search?.execute({ query: 123 }))?.content).toContain("query must be a string")
+
+    const remove = registered.find((tool) => tool.name === "delete")
+    expect((await remove?.execute({ ids: ["1"] }))?.content).toContain('"deleted": 1')
+    expect(lastDelete).toEqual({ ids: ["1"], hard: undefined })
+    const removeHard = await remove?.execute({ ids: ["1"], hard: true })
+    expect(lastDelete).toEqual({ ids: ["1"], hard: true })
+    expect(removeHard?.content).toContain('"mode": "hard"')
+    expect((await remove?.execute({ ids: [] }))?.content).toContain("ids must be an array of 1..100 item ids")
+    expect(
+      (await remove?.execute({ ids: Array.from({ length: 101 }, (_, index) => String(index)) }))?.content,
+    ).toContain("ids must be an array of 1..100 item ids")
+    const empty = registered.find((tool) => tool.name === "empty_deleted")
+    expect((await empty?.execute({ confirm: false }))?.content).toContain("confirm: true is required")
+    expect((await empty?.execute({ confirm: true }))?.content).toContain('"emptied": true')
   })
 
   test("codemode=true switches every tool to Code Mode", async () => {
@@ -142,7 +165,7 @@ describe("registerTools", () => {
     } as unknown as Plugin.Context
 
     await registerTools(ctx, coded)
-    expect(registered).toHaveLength(10)
+    expect(registered).toHaveLength(12)
     for (const tool of registered) expect(tool.options?.codemode).toBe(true)
   })
 
@@ -204,6 +227,8 @@ describe("registerTools", () => {
       list: "mail.read",
       search: "mail.read",
       get: "mail.read",
+      delete: "mail.delete",
+      empty_deleted: "mail.delete",
       sync: "mail.read",
       draft: "mail.draft",
       send: "mail.send",

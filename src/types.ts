@@ -50,6 +50,12 @@ export interface SyncResult {
   skipped?: "not-indexed" | "storage-off"
 }
 
+export interface DeleteResult {
+  deleted: number
+  /** `soft` moves to Deleted Items; `hard` permanently deletes. */
+  mode: "soft" | "hard"
+}
+
 export interface OutgoingAttachment {
   name: string
   contentBase64: string
@@ -91,6 +97,10 @@ export interface MailBackend {
   listMessages(input: { folder?: string; limit: number; offset?: number }): Promise<MessageSummary[]>
   searchMessages(input: { query: string; limit: number }): Promise<MessageSummary[]>
   getMessage(input: { id: string }): Promise<MessageDetail>
+  /** Soft-delete moves to Deleted Items; hard-delete is permanent. */
+  deleteMessages(input: { ids: string[]; hard?: boolean }): Promise<DeleteResult>
+  /** Permanently empties Deleted Items (EWS `EmptyFolder` + `HardDelete`). */
+  emptyDeleted(): Promise<{ emptied: true }>
   /** EWS `Send` returns no item id: the result only confirms the server accepted the message. */
   send(input: OutgoingMessage): Promise<{ sent: true }>
   saveDraft(input: OutgoingMessage): Promise<{ id: string }>

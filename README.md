@@ -42,11 +42,11 @@ Reads and sends mail, lists calendar events and contacts from an on-prem Exchang
 NTLM. Runs inside OpenCode V2 as a native TypeScript plugin: Bun executes `src/index.ts` directly, no build step.
 
 Verified on Exchange 2016 (build 15.1.2507.6), NTLMv2, internal CA. Bun 1.4.2, `@opencode/plugin` 2.0.26,
-117 tests.
+137 tests.
 
 ## Features
 
-- 10 `mail_*` tools: accounts, folders, list, search, get, sync, draft, send, calendar, contacts.
+- 12 `mail_*` tools: accounts, folders, list, search, get, delete/empty-deleted, sync, draft, send, calendar, contacts.
 - Multiple mailboxes in one process with per-account credentials and SQLite.
 - Storage modes `off` / `metadata` / `full`; local SQLite index in `metadata`/`full`, `off` = EWS-only.
 - EWS/NTLM with explicit XML escaping, recipient validation and attachment limits.
@@ -68,7 +68,7 @@ Verified on Exchange 2016 (build 15.1.2507.6), NTLMv2, internal CA. Bun 1.4.2, `
 - OpenCode V2 with `@opencode/plugin` 2.0.26 (live session verification — R5 — is not done yet)
 - Bun 1.4.2 (tested)
 - Exchange on-prem with EWS enabled and an NTLM domain account
-- `NODE_EXTRA_CA_CERTS` pointing to the root CA PEM when EWS uses an internal CA
+- Internal CA: set `caFile` per account (applied at runtime); `NODE_EXTRA_CA_CERTS` is a fallback for runtimes without `tls.setDefaultCACertificates` and for standalone scripts
 
 ### Installation
 
@@ -77,6 +77,13 @@ From npm (recommended):
 ```bash
 opencode plugin add opencode-mail-exchange
 ```
+
+OpenCode installs the package into its cache (on Windows usually
+`C:\Users\<you>\.cache\opencode\npm\opencode-mail-exchange@latest\<timestamp>\node_modules\opencode-mail-exchange`);
+`opencode plugin list` shows the plugin entry (ID, version, source). The package is loaded on the next config reload. A bare
+`"opencode-mail-exchange"` entry loads the plugin but registers **no** `mail_*` tools until account credentials
+are configured (`options.accounts`, or top-level `ewsUrl`/`username`/`password`) — the plugin log then says
+`not configured`.
 
 Then configure it in `opencode.jsonc` (the full example below). From source:
 
@@ -117,20 +124,39 @@ and use `"package": "file:///C:/path/to/opencode-mail-exchange"` instead of the 
 }
 ```
 
-Passwords normally come from env, one per account; inline `password` is accepted but not recommended:
+Passwords normally come from env, one per account; inline `password` is accepted but not recommended.
+For the OpenCode background service, `{file:...}` is usually easier: it is resolved by the config loader, so no
+service restart and no environment variables are needed.
 
-```bash
-export MAIL_PASSWORD_PRIMARY='...'
-export MAIL_PASSWORD_SHARED='...'
-export NODE_EXTRA_CA_CERTS='/path/to/root-ca.pem'   # internal CA only
+```jsonc
+"accounts": [
+  {
+    "id": "primary",
+    "ewsUrl": "https://exchange.example.com/EWS/Exchange.asmx",
+    "username": "DOMAIN\\bot",
+    "selfAddress": "bot@example.com",
+    "password": "{file:C:/Users/me/.config/opencode/secrets/mail-primary.txt}"
+  }
+]
 ```
+
+The file contains the password only, one line. Env variables (`MAIL_PASSWORD_<ID>` / `MAIL_PASSWORD`) are read by
+the **background service process** at `setup()`, not by the terminal that starts `opencode`; a project `.env`
+is not read. `{env:VAR}` works in config too, but still requires the variable in the service environment.
 
 `MAIL_PASSWORD` is the fallback when no per-account variable is set. `<ID>` is the account id uppercased with
 non-alphanumerics replaced by `_`; a single account gets `default`, multiple accounts without explicit ids get
 `account-1`, `account-2`, …
 
-Without `NODE_EXTRA_CA_CERTS`, Bun does not trust an internal CA; the symptom is an opaque
-`undefined is not an object (evaluating 'response.headers')` from `@ewsjs/xhr`, not `UNABLE_TO_VERIFY_LEAF_SIGNATURE`.
+With `caFile`, the plugin adds the PEM to the runtime trust store via `tls.setDefaultCACertificates`, so
+`NODE_EXTRA_CA_CERTS` is not required for EWS calls. If the runtime lacks that API, the plugin warns; set
+`NODE_EXTRA_CA_CERTS` before starting OpenCode. A missing `caFile` path is a `ConfigError` at startup; an
+existing file that cannot be read or parsed is logged and skipped for that account, while valid `caFile`
+entries are still applied. A PEM replaced at the same path is re-applied on the next setup (content hash).
+Rotation is append-only: the previous root stays trusted until the process restarts; restart OpenCode to
+revoke a compromised CA. Standalone Bun scripts that import the plugin sources do not inherit the service
+trust store; run them with `NODE_EXTRA_CA_CERTS=<root-ca.pem>` or inside the OpenCode process. A TLS/CA failure
+is reported as `EWS TLS/CA handshake failed; check NODE_EXTRA_CA_CERTS...`.
 
 ### Configuration
 
@@ -153,7 +179,7 @@ URL, username and password have no defaults. Examples use `example.com`.
 | `allowSend` | `MAIL_ALLOW_SEND` | `true` | allow `mail.send`; `true/false/1/0/yes/no/on/off`; unknown value raises `ConfigError` |
 | `requestTimeoutMs` | `MAIL_REQUEST_TIMEOUT_MS` | 30000 | EWS timeout, ms (≤120000) |
 | `codemode` | `MAIL_CODEMODE` | `false` | `false` — direct tools; `true` — only through Code Mode `execute` (global) |
-| `caFile` | `MAIL_CA_FILE` | — | PEM existence check and `NODE_EXTRA_CA_CERTS` hint; TLS trust is set by that env only |
+| `caFile` | `MAIL_CA_FILE` | — | PEM root/intermediate CA; applied to the runtime TLS trust store at setup (fallback: `NODE_EXTRA_CA_CERTS`); a missing path is a `ConfigError`, invalid content is logged and skipped |
 
 Top-level options are inherited by `accounts[]`; per-account values win, except `codemode` (global).
 `dataDir` must be a normal path: extended-length (`\\?\`) and device (`\\.\`) namespaces are rejected with
@@ -170,15 +196,37 @@ Top-level options are inherited by `accounts[]`; per-account values win, except 
 | `mail_list` | messages in a folder (metadata, paging) |
 | `mail_search` | local FTS + EWS body search (Inbox), merged and deduplicated |
 | `mail_get` | message + body; `fetched` / `bodyCached` |
+| `mail_delete` | delete by ids; soft (move to Deleted Items; the old id becomes invalid) or `hard: true` (permanent) |
+| `mail_empty_deleted` | permanently delete top-level items in Deleted Items (subfolders remain); requires `confirm: true` |
 | `mail_sync` | incremental `SyncFolderItems`; `{synced, complete}` |
 | `mail_draft` | create a draft |
 | `mail_send` | send; `{sent: true}` (EWS `Send` returns no id) |
 | `mail_calendar` | events in a range |
 | `mail_contacts` | contacts; `query` scans up to 500 contacts page by page |
 
-Permissions: `mail.read` (read tools), `mail.draft`, `mail.send`.
+Permissions: `mail.read` (read tools), `mail.draft`, `mail.send`, `mail.delete` (`mail_delete` and
+`mail_empty_deleted`). `mail_empty_deleted` is irreversible and requires `confirm: true`; `confirm` is a
+model-level guard, while the effective gate is the `mail.delete` permission. Prefer soft deletion
+(`mail_delete` without `hard`) for everything else.
 `account` selects the mailbox; the first account is the default.
 `codemode: false` (default) lists tools directly; `codemode: true` exposes them only through `execute`.
+
+### Deleting
+
+`mail_delete` moves messages to Deleted Items by default; `hard: true` permanently deletes them.
+`mail_empty_deleted` permanently deletes the top-level items in Deleted Items; subfolders are left in place.
+Both need the `mail.delete` permission; `mail_empty_deleted` additionally requires `confirm: true`.
+
+In a configured local index both delete modes tombstone the affected rows. Exchange assigns a new ItemId
+when an item is moved to Deleted Items, so the old id becomes invalid: run `mail_sync` for `deleted` to get the
+new id; a plain `mail_list` may serve a fresh cache and not show the new row until the sync interval.
+`mail_get`/`mail_delete` by an old id will fail until that sync. Emptying also tombstones
+every indexed row in `deleted`. If EWS rejects the whole batch, the index is left unchanged; per-item failures
+apply only the confirmed deletions and the call fails with the counts and the first reason. A transport
+failure after the request may leave the outcome unknown: run `mail_sync` before retrying.
+
+Ids are passed to EWS `DeleteItem`, so pass mail ids only. If a meeting id is supplied, EWS deletes it with
+`SendToNone` (attendees are not notified); the plugin does not distinguish item classes before deleting.
 
 Search scope: every search merges local FTS (`inbox`, `sent`, `drafts`, `deleted`) with the EWS subject/body
 search in `Inbox`, deduplicating by id and returning the newest `limit` matches. Other folders are not covered

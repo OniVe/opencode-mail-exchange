@@ -216,7 +216,7 @@ export async function registerTools(
         type: "object",
         properties: {
           account: accountField,
-          id: { type: "string", minLength: 1, description: "EWS item id from mail_list/mail_search" },
+          id: { type: "string", minLength: 1, maxLength: 2048, description: "EWS item id from mail_list/mail_search" },
         },
         required: ["id"],
         additionalProperties: false,
@@ -226,6 +226,74 @@ export async function registerTools(
         const typed = input as AccountInput & { id: string }
         try {
           return { content: json(await run(typed, (backend) => backend.getMessage({ id: typed.id }))) }
+        } catch (error) {
+          return failure(error)
+        }
+      },
+    })
+
+    add({
+      name: "delete",
+      description:
+        "Delete mail items by id. Soft by default (move to Deleted Items; the old id becomes invalid, run mail_sync for deleted before re-listing); hard=true permanently deletes them. Ids go to EWS DeleteItem, so pass only mail ids (a meeting id would be deleted with SendToNone).",
+      input: {
+        type: "object",
+        properties: {
+          account: accountField,
+          ids: {
+            type: "array",
+            items: { type: "string", minLength: 1, maxLength: 2048 },
+            minItems: 1,
+            maxItems: 100,
+            description: "EWS item ids from mail_list/mail_search/mail_get",
+          },
+          hard: {
+            type: "boolean",
+            description: "Permanently delete instead of moving to Deleted Items (irreversible)",
+          },
+        },
+        required: ["ids"],
+        additionalProperties: false,
+      },
+      options: { namespace: "mail", codemode, permission: "mail.delete" },
+      execute: async (input) => {
+        const typed = input as AccountInput & { ids: string[]; hard?: boolean }
+        try {
+          if (!Array.isArray(typed.ids) || typed.ids.length === 0 || typed.ids.length > 100) {
+            throw new Error("ids must be an array of 1..100 item ids")
+          }
+          return {
+            content: json(await run(typed, (backend) => backend.deleteMessages({ ids: typed.ids, hard: typed.hard }))),
+          }
+        } catch (error) {
+          return failure(error)
+        }
+      },
+    })
+
+    add({
+      name: "empty_deleted",
+      description:
+        "Permanently empty the top-level items of Deleted Items (subfolders remain). Irreversible; requires confirm: true. Use only after an explicit user confirmation.",
+      input: {
+        type: "object",
+        properties: {
+          account: accountField,
+          confirm: {
+            type: "boolean",
+            description:
+              "Must be true: this permanently deletes every top-level item in Deleted Items (subfolders remain)",
+          },
+        },
+        required: ["confirm"],
+        additionalProperties: false,
+      },
+      options: { namespace: "mail", codemode, permission: "mail.delete" },
+      execute: async (input) => {
+        const typed = input as AccountInput & { confirm?: boolean }
+        try {
+          if (typed.confirm !== true) throw new Error("confirm: true is required to empty Deleted Items")
+          return { content: json(await run(typed, (backend) => backend.emptyDeleted())) }
         } catch (error) {
           return failure(error)
         }

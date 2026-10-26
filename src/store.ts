@@ -676,6 +676,8 @@ const rowToSummary = (row: MessageRow): MessageSummary => {
 export interface Store {
   upsertMessages(folderId: string, messages: MessageSummary[]): void
   tombstone(ids: string[]): void
+  /** Hard delete of every indexed row in a folder; returns how many rows were tombstoned. */
+  tombstoneFolder(folderId: string): number
   markRead(ids: string[], isRead: boolean): void
   updateRecipients(id: string, to: string[], cc: string[]): void
   listMessages(input: { folderId?: string; limit: number; offset?: number }): MessageSummary[]
@@ -780,6 +782,15 @@ export function openStore(config: MailConfig): Store | undefined {
     }
   })
 
+  const tombstoneFolder = (folderId: string): number => {
+    const rows = db.query("select id from messages where folder_id = ? and deleted = 0").all(folderId) as Array<{
+      id: string
+    }>
+    if (rows.length === 0) return 0
+    tombstone(rows.map((row) => row.id))
+    return rows.length
+  }
+
   const updateRecipients = db.transaction((id: string, to: string[], cc: string[]) => {
     // `recipients_fetched` is set even for an empty list: a bind that returned no recipients
     // is an answer ("known empty"), not a reason to ask EWS again on every page.
@@ -874,6 +885,7 @@ export function openStore(config: MailConfig): Store | undefined {
   return {
     upsertMessages,
     tombstone,
+    tombstoneFolder,
     markRead,
     updateRecipients,
     listMessages({ folderId, limit, offset = 0 }) {

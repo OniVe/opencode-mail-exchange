@@ -1,10 +1,13 @@
 import {
+  AffectedTaskOccurrence,
   BasePropertySet,
+  BatchServiceResponseException,
   BodyType,
   CalendarView,
   ChangeType,
   ContactSchema,
   DateTime,
+  DeleteMode,
   EmailAddress,
   EmailMessage,
   EmailMessageSchema,
@@ -18,6 +21,8 @@ import {
   MessageBody,
   PropertySet,
   SearchFilter,
+  SendCancellationsMode,
+  ServiceResponseException,
   ServiceResult,
   SortDirection,
   SyncFolderItemsScope,
@@ -40,6 +45,7 @@ import { isImpossibleDateQuery } from "./store"
 import type {
   CalendarEvent,
   ContactDto,
+  DeleteResult,
   FolderDto,
   MailBackend,
   MessageDetail,
@@ -242,12 +248,23 @@ const errorText = (error: unknown): string => {
 
 /** EWS `UniqueId` is base64-like; anything else cannot be an item id and must not reach SOAP. */
 const ITEM_ID_PATTERN = /^[A-Za-z0-9+/=_-]+$/
+const MAX_ITEM_ID_LENGTH = 2048
 
 const checkItemId = (id: unknown): string => {
   const value = typeof id === "string" ? id.trim() : ""
   if (!value || !ITEM_ID_PATTERN.test(value)) throw new Error(`invalid item id: ${JSON.stringify(id)}`)
+  if (value.length > MAX_ITEM_ID_LENGTH) {
+    throw new Error(`item id is too long: ${value.length} > ${MAX_ITEM_ID_LENGTH}`)
+  }
   return value
 }
+
+const resultLabel = (result: ServiceResult): string =>
+  result === ServiceResult.Success ? "success" : result === ServiceResult.Warning ? "warning" : "error"
+
+/** A server-side rejection is definite; transport/parse errors may leave the outcome unknown. */
+const isExplicitServiceError = (error: unknown): boolean =>
+  error instanceof ServiceResponseException || error instanceof BatchServiceResponseException
 
 /**
  * ErrorInvalidSyncStateData (237) or a message that explicitly ties a *synchronization
@@ -381,6 +398,97 @@ export class EwsBackend implements MailBackend {
     this.persistRecipients(id, summary.to, cc)
 
     return { ...summary, cc, body, bodyType, truncated, fetched: true, bodyCached }
+  }
+
+  async deleteMessages(input: { ids: string[]; hard?: boolean }): Promise<DeleteResult> {
+    // EWS replies per item and rejects a duplicate ItemId in the same batch; dedupe before
+    // the request so a repeated id is not reported as a partial failure.
+    const ids: string[] = []
+    const seen = new Set<string>()
+    for (const raw of input.ids) {
+      const id = checkItemId(raw)
+      if (seen.has(id)) continue
+      seen.add(id)
+      ids.push(id)
+    }
+    const hard = input.hard === true
+    let responses: { Responses: Array<{ Result: ServiceResult; ErrorMessage?: string }> }
+    try {
+      responses = await this.service.DeleteItems(
+        ids.map((id) => new ItemId(id)),
+        hard ? DeleteMode.HardDelete : DeleteMode.MoveToDeletedItems,
+        SendCancellationsMode.SendToNone,
+        AffectedTaskOccurrence.AllOccurrences,
+      )
+    } catch (error) {
+      if (isExplicitServiceError(error)) throw new Error(`EWS delete failed: ${errorText(error)}`)
+      // The server may have applied a batch before the transport failed. Do not guess:
+      // the next sync reconciles the index, and a retry without it can hit ItemNotFound.
+      throw new Error(`EWS delete failed; the server may have applied it, run mail_sync first: ${errorText(error)}`)
+    }
+
+    // Only an explicit per-item Success confirms a deletion. `Warning` (including
+    // ErrorBatchProcessingStopped) and a missing/short `Responses` array do not.
+    const results = responses.Responses ?? []
+    const confirmed: string[] = []
+    const unconfirmed: string[] = []
+    let firstReason = ""
+    for (let index = 0; index < ids.length; index++) {
+      const result = results[index]
+      if (result?.Result === ServiceResult.Success) {
+        confirmed.push(ids[index])
+        continue
+      }
+      unconfirmed.push(ids[index])
+      if (firstReason === "") {
+        firstReason = result
+          ? `result ${resultLabel(result.Result)}${result.ErrorMessage ? `: ${result.ErrorMessage}` : ""}`
+          : "no per-item response"
+      }
+    }
+    if (this.store && confirmed.length > 0) this.store.tombstone(confirmed)
+    if (unconfirmed.length > 0) {
+      throw new Error(
+        `EWS delete incomplete: ${confirmed.length} of ${ids.length} confirmed, ${unconfirmed.length} not confirmed (${firstReason})`,
+      )
+    }
+    return { deleted: confirmed.length, mode: hard ? "hard" : "soft" }
+  }
+
+  async emptyDeleted(): Promise<{ emptied: true }> {
+    // `ews-javascript-api` ships `EmptyFolder` in JS but omits it from the TypeScript surface.
+    const service = this.service as unknown as {
+      EmptyFolder: (
+        folderId: unknown,
+        deleteMode: DeleteMode,
+        deleteSubFolders: boolean,
+      ) => Promise<{
+        Responses: Array<{ Result: ServiceResult; ErrorMessage?: string }>
+      }>
+    }
+    let responses: { Responses: Array<{ Result: ServiceResult; ErrorMessage?: string }> }
+    try {
+      responses = await service.EmptyFolder(
+        new FolderId(WellKnownFolderName.DeletedItems),
+        DeleteMode.HardDelete,
+        false,
+      )
+    } catch (error) {
+      if (isExplicitServiceError(error)) throw new Error(`EWS empty folder failed: ${errorText(error)}`)
+      throw new Error(
+        `EWS empty folder failed; the server may have applied it, run mail_sync first: ${errorText(error)}`,
+      )
+    }
+    const results = responses.Responses ?? []
+    if (results.length !== 1 || results[0]?.Result !== ServiceResult.Success) {
+      const first = results[0]
+      const reason = first
+        ? `result ${resultLabel(first.Result)}${first.ErrorMessage ? `: ${first.ErrorMessage}` : ""}`
+        : "no response"
+      throw new Error(`EWS empty folder was not confirmed (${reason}); run mail_sync to reconcile`)
+    }
+    this.store?.tombstoneFolder("wk:deleted")
+    return { emptied: true }
   }
 
   async send(input: OutgoingMessage): Promise<{ sent: true }> {
