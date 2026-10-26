@@ -1,6 +1,6 @@
 # Roadmap
 
-Текущее состояние: 173 тестов; цикл аудита 2026-10-26 (size/attachments delta) — ready; опубликован 0.4.2. Ниже — запланированные фичи, не входящие в v0.1.
+Текущее состояние: 204 тестов; цикл аудита 2026-10-26 (XHR-провайдер) — в работе; опубликован 0.4.2. Ниже — запланированные фичи, не входящие в v0.1.
 
 ## R1. Шифрование локального индекса SQLite
 
@@ -62,13 +62,11 @@ EWS в EXO: блокировка с 01.10.2026, shutdown 01.04.2027. Отдел�
 
 ## R3. Свой XHR-провайдер вместо глобального патча axios
 
-**Приоритет:** P1 (техдолг). **Статус:** план.
+**Приоритет:** P1 (техдолг). **Статус:** готово.
 
-Сейчас отмена работает через process-global патч CJS-инстанса axios (`createRequire` + `axios.create`). Плюсы: мало кода, покрыто тестами. Минусы: глобальный side effect, зависимость от идентичности модуля, хрупкость в бандле, патч не снимается.
+Реализовано в `src/xhr-router.ts`: `MailXhrProvider` — свой `IXHRApi` на `axios` + `@ewsjs/ntlm-client`, с NTLM type1/type2/type3, `signal`, дедлайном обычного вызова (preflight+final) и inactivity-watchdog для стрима. `ConfigurationApi.ConfigureXHR(provider)` — единственная глобальная точка; `createRequire` и патч CJS-axios удалены, прямая зависимость `@ewsjs/xhr` убрана (транзитивная остаётся в `ews-javascript-api` и загружается его `XHRFactory`). Покрыто тестами: NTLM-обмен и тело SOAP, non-200 и обрезанное/оборванное тело с флагом `truncated`, таймаут preflight/final и idle-стрима, abort, `disconnect`/`dispose`, инъекция заголовков (CL/TE/Host/Auth, регистр), multi-scheme `WWW-Authenticate`, stream 200/404, UTF-8 на границе чанков, ровно один повторный handshake при 401; live-проверка на Exchange 2016 прошла.
 
-Цель: `IXHRApi` на базе MIT-кода `XhrApi`/`NtlmProvider` + `@ewsjs/ntlm-client`, с `signal` и `timeout` в запросе. Убрать monkeypatch и `createRequire`; оставить только `ConfigurationApi.ConfigureXHR(provider)`.
-
-Альтернатива: vendor/patch `@ewsjs/xhr` (`bun patch`) — меньше кода, но остаётся форк зависимости.
+Альтернатива vendor/patch `@ewsjs/xhr` больше не нужна.
 
 ## R4. Стратегия по `ews-javascript-api`
 

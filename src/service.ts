@@ -4,7 +4,13 @@ import { openStore, type Store } from "./store"
 import type { MailBackend } from "./types"
 import { disposeXhrRouter, withAccount } from "./xhr-router"
 
-const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error))
+const messageOf = (error: unknown): string => {
+  if (error instanceof Error) return error.message
+  const typed = error as { message?: unknown; Message?: unknown } | null
+  if (typeof typed?.message === "string" && typed.message !== "") return typed.message
+  if (typeof typed?.Message === "string" && typed.Message !== "") return typed.Message
+  return String(error)
+}
 
 /**
  * Transport symptoms. `@ewsjs/xhr` on Bun reports both a TLS/CA rejection and a timeout as
@@ -145,7 +151,13 @@ export class MailService {
     const started = Date.now()
     try {
       return await withAccount(
-        { username: config.username, password: config.password, timeoutMs: config.requestTimeoutMs, signal },
+        {
+          accountId: config.id,
+          username: config.username,
+          password: config.password,
+          timeoutMs: config.requestTimeoutMs,
+          signal,
+        },
         () => action(backend),
       )
     } catch (error) {
@@ -153,15 +165,22 @@ export class MailService {
       if (typed?.code === "ERR_CANCELED" || typed?.name === "CanceledError" || typed?.name === "AbortError") {
         throw new Error("EWS request cancelled", { cause: error })
       }
-      // `@ewsjs/xhr`'s NTLM preCall swallows CanceledError: the abort surfaces as a bare
-      // `response.headers` TypeError without a code. Treat that as cancellation too.
-      if (signal?.aborted && typed?.code === undefined && isTransportFailure(error)) {
+      // EWS wraps a provider cancellation into SoapFaultDetails without preserving `code`.
+      // With an aborted signal, an explicit cancel/abort wording is the only remaining marker.
+      const text = symptomText(error)
+      if (
+        signal?.aborted &&
+        typed?.code === undefined &&
+        (/\bcancel+ed\b|\babort(?:ed)?\b/i.test(text) || isTransportFailure(error))
+      ) {
         throw new Error("EWS request cancelled", { cause: error })
       }
       const message = messageOf(error)
       if (!isTransportFailure(error)) throw error
       const code = (error as { code?: unknown } | null)?.code
-      const forceTimeout = typeof code === "string" && /^(?:ETIMEDOUT|ECONNABORTED)$/.test(code)
+      const forceTimeout =
+        (typeof code === "string" && /^(?:ETIMEDOUT|ECONNABORTED)$/.test(code)) ||
+        /\btimeout of \d+\s*ms exceeded\b|ECONNABORTED|ETIMEDOUT/i.test(message)
       const described = describeTransportFailure(
         symptomText(error),
         Date.now() - started,

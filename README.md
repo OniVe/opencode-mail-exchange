@@ -42,7 +42,7 @@ Reads and sends mail, lists calendar events and contacts from an on-prem Exchang
 NTLM. Runs inside OpenCode V2 as a native TypeScript plugin: Bun executes `src/index.ts` directly, no build step.
 
 Verified on Exchange 2016 (build 15.1.2507.6), NTLMv2, internal CA. Bun 1.4.2, `@opencode/plugin` 2.0.26,
-173 tests.
+204 tests.
 
 ## Features
 
@@ -58,7 +58,7 @@ Verified on Exchange 2016 (build 15.1.2507.6), NTLMv2, internal CA. Bun 1.4.2, `
 - [Bun](https://bun.sh/) 1.4
 - TypeScript 5.9 (strict)
 - [Biome](https://biomejs.dev/) 2.5
-- [`ews-javascript-api`](https://github.com/gautamsi/ews-javascript-api) 0.15.3 + `@ewsjs/xhr` 3.1.3
+- [`ews-javascript-api`](https://github.com/gautamsi/ews-javascript-api) 0.15.3 + own NTLM XHR provider (`axios` + `@ewsjs/ntlm-client`)
 - SQLite + FTS5 via `bun:sqlite`
 
 ## Getting Started
@@ -177,7 +177,7 @@ URL, username and password have no defaults. Examples use `example.com`.
 | `maxBodyBytes` | `MAIL_MAX_BODY_BYTES` | 100000 (max 1,000,000) | body truncation, UTF-8 bytes |
 | `syncIntervalMinutes` | `MAIL_SYNC_INTERVAL_MINUTES` | 5 (max 1440) | index refresh interval |
 | `allowSend` | `MAIL_ALLOW_SEND` | `true` | allow `mail.send`; `true/false/1/0/yes/no/on/off`; unknown value raises `ConfigError` |
-| `requestTimeoutMs` | `MAIL_REQUEST_TIMEOUT_MS` | 30000 | EWS timeout, ms (≤120000) |
+| `requestTimeoutMs` | `MAIL_REQUEST_TIMEOUT_MS` | 30000 | EWS call timeout, ms (≤120000); covers the whole call, including the NTLM preflight; a hanging stream is bounded by twice this value of socket inactivity plus `signal`/`disconnect` |
 | `codemode` | `MAIL_CODEMODE` | `false` | `false` — direct tools; `true` — only through Code Mode `execute` (global) |
 | `caFile` | `MAIL_CA_FILE` | — | PEM root/intermediate CA; applied to the runtime TLS trust store at setup (fallback: `NODE_EXTRA_CA_CERTS`); a missing path is a `ConfigError`, invalid content is logged and skipped |
 
@@ -319,13 +319,12 @@ encryption is required. Encryption is planned in [docs/roadmap.md](docs/roadmap.
 
 ## Roadmap
 
-See [docs/roadmap.md](docs/roadmap.md): SQLite encryption with body search, Graph backend for Exchange Online,
-own XHR provider replacing the global axios patch.
+See [docs/roadmap.md](docs/roadmap.md): SQLite encryption with body search, Graph backend for Exchange Online.
 
 ## Risks
 
 See [risks.md](risks.md) for the full list (plaintext SQLite, library maintenance, EWS retirement in Exchange
-Online, global axios patch).
+Online).
 
 ## Development
 

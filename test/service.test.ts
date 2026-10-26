@@ -164,6 +164,49 @@ describe("transport error messages", () => {
     }
   })
 
+  test("a cancellation wrapped into SoapFaultDetails is reported as cancellation", async () => {
+    const cfg = config(30_000)
+    const service = new MailService([cfg])
+    const controller = new AbortController()
+    controller.abort()
+    try {
+      await service.run(
+        "default",
+        async () => {
+          // The provider throws a CanceledError; ews-javascript-api wraps it and drops `code`.
+          throw { message: "canceled", ErrorCode: 0 }
+        },
+        controller.signal,
+      )
+      throw new Error("expected the action to fail")
+    } catch (thrown) {
+      expect((thrown as Error).message).toMatch(/EWS request cancelled/)
+    } finally {
+      service.close()
+      rmSync(cfg.dataDir, { recursive: true, force: true })
+    }
+  })
+
+  test("a cancellation wording without an aborted signal is passed through", async () => {
+    const error = { message: "canceled", ErrorCode: 0 }
+    const { thrown, cfg, service } = await runFailing(30_000, async () => {
+      throw error
+    })
+    expect(thrown).toBe(error)
+    service.close()
+    rmSync(cfg.dataDir, { recursive: true, force: true })
+  })
+
+  test("an EWS-wrapped timeout is a timeout even when it returns instantly", async () => {
+    const { thrown, cfg, service } = await runFailing(300, async () => {
+      throw { message: "timeout of 300ms exceeded", ErrorCode: 0 }
+    })
+    expect((thrown as Error).message).toMatch(/EWS timeout after 300 ms/)
+    expect((thrown as Error).message).not.toContain("TLS")
+    service.close()
+    rmSync(cfg.dataDir, { recursive: true, force: true })
+  })
+
   test("duplicate symptom parts are de-duplicated", async () => {
     const symptom = "undefined is not an object (evaluating 'response.headers')"
     const { thrown, cfg, service } = await runFailing(30_000, async () => {

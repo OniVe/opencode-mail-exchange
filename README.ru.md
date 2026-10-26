@@ -42,7 +42,7 @@
 Работает внутри OpenCode V2 как нативный TypeScript-плагин: Bun исполняет `src/index.ts` напрямую, сборка не нужна.
 
 Проверено на Exchange 2016 (build 15.1.2507.6), NTLMv2, внутренний CA. Bun 1.4.2, `@opencode/plugin` 2.0.26,
-173 тестов.
+204 тестов.
 
 ## Возможности
 
@@ -58,7 +58,7 @@
 - [Bun](https://bun.sh/) 1.4
 - TypeScript 5.9 (strict)
 - [Biome](https://biomejs.dev/) 2.5
-- [`ews-javascript-api`](https://github.com/gautamsi/ews-javascript-api) 0.15.3 + `@ewsjs/xhr` 3.1.3
+- [`ews-javascript-api`](https://github.com/gautamsi/ews-javascript-api) 0.15.3 + собственный NTLM XHR-провайдер (`axios` + `@ewsjs/ntlm-client`)
 - SQLite + FTS5 через `bun:sqlite`
 
 ## Начало работы
@@ -177,7 +177,7 @@ URL, логин и пароль не имеют значений по умолч
 | `maxBodyBytes` | `MAIL_MAX_BODY_BYTES` | 100000 (max 1 000 000) | обрезка тела, байты UTF-8 |
 | `syncIntervalMinutes` | `MAIL_SYNC_INTERVAL_MINUTES` | 5 (max 1440) | период обновления индекса |
 | `allowSend` | `MAIL_ALLOW_SEND` | `true` | разрешить `mail.send`; `true/false/1/0/yes/no/on/off`; неизвестное значение — `ConfigError` |
-| `requestTimeoutMs` | `MAIL_REQUEST_TIMEOUT_MS` | 30000 | таймаут EWS, мс (≤120000) |
+| `requestTimeoutMs` | `MAIL_REQUEST_TIMEOUT_MS` | 30000 | таймаут EWS-вызова, мс (≤120000); покрывает весь вызов, включая NTLM preflight; висящий stream ограничен удвоенной величиной сокетной неактивности плюс `signal`/`disconnect` |
 | `codemode` | `MAIL_CODEMODE` | `false` | `false` — прямые tools; `true` — только через Code Mode `execute` (глобально) |
 | `caFile` | `MAIL_CA_FILE` | — | PEM корневого/промежуточного CA; применяется в trust store рантайма при setup (fallback: `NODE_EXTRA_CA_CERTS`); отсутствующий путь — `ConfigError`, невалидное содержимое логируется и пропускается |
 
@@ -318,13 +318,12 @@ plaintext-индекс окажется там. Держите его вне п�
 
 ## Roadmap
 
-См. [docs/roadmap.md](docs/roadmap.md): шифрование SQLite с поиском по телу, Graph-бэкенд для Exchange Online,
-свой XHR-провайдер вместо глобального патча axios.
+См. [docs/roadmap.md](docs/roadmap.md): шифрование SQLite с поиском по телу, Graph-бэкенд для Exchange Online.
 
 ## Риски
 
 См. [risks.md](risks.md) — полный список (plaintext SQLite, поддержка библиотеки, EWS retirement в Exchange
-Online, глобальный патч axios).
+Online).
 
 ## Разработка
 
