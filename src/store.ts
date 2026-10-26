@@ -856,6 +856,26 @@ export function openStore(config: MailConfig): Store | undefined {
       attachmentCount = null
       clearCount = true
     }
+    // If only one side is supplied, compare it with the stored pair so a direct API call
+    // cannot persist {true,0} or {false,>0} through a one-flag update.
+    if (hasAttachments === null || (input.attachmentCount === undefined && !clearAttachmentCount)) {
+      const current = db
+        .query("select has_attachments, attachment_count from messages where id = ? and deleted = 0")
+        .get(id) as { has_attachments: number; attachment_count: number | null } | null
+      if (current) {
+        const effectiveHas = hasAttachments ?? current.has_attachments
+        const effectiveCount =
+          input.attachmentCount === undefined && !clearAttachmentCount
+            ? normalizeAttachmentCount(current.attachment_count)
+            : attachmentCount
+        if (effectiveHas === 1 && effectiveCount === 0) {
+          clearCount = true
+        } else if (effectiveHas === 0 && effectiveCount !== null && effectiveCount > 0) {
+          attachmentCount = null
+          clearCount = true
+        }
+      }
+    }
     if (size === null && attachmentCount === null && hasAttachments === null && !clearCount) return
     db.query(
       "update messages set size = coalesce(?, size), attachment_count = case when ? then null else coalesce(?, attachment_count) end, has_attachments = coalesce(?, has_attachments), updated_ts = ? where id = ? and deleted = 0",

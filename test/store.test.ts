@@ -458,6 +458,11 @@ describe("store", () => {
     expect(store.listMessages({ folderId: "wk:inbox", limit: 10 })[0]?.attachmentCount).toBeUndefined()
     store.updateMetadata("bad", { hasAttachments: false, attachmentCount: 2 })
     expect(store.listMessages({ folderId: "wk:inbox", limit: 10 })[0]?.attachmentCount).toBe(0)
+    store.updateMetadata("bad", { hasAttachments: true })
+    expect(store.listMessages({ folderId: "wk:inbox", limit: 10 })[0]?.attachmentCount).toBeUndefined()
+    store.updateMetadata("bad", { hasAttachments: false })
+    store.updateMetadata("bad", { attachmentCount: 2 })
+    expect(store.listMessages({ folderId: "wk:inbox", limit: 10 })[0]?.attachmentCount).toBe(0)
 
     const db = new Database(path.join(config.dataDir, "mail.db"))
     const stored = db.query("select size, attachment_count from messages where id = 'bad'").get() as {
