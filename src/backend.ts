@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto"
+import { mkdir, writeFile } from "node:fs/promises"
+import path from "node:path"
 import {
   AffectedTaskOccurrence,
   type Attachment,
@@ -65,6 +68,7 @@ import type {
   MessageDetail,
   MessageSummary,
   OutgoingMessage,
+  SavedAttachment,
   SyncResult,
 } from "./types"
 
@@ -335,6 +339,28 @@ const attachmentKind = (attachment: Attachment): "file" | "item" => {
   return safe(() => typeof file.FileName === "string" && file.FileName !== "", false) ? "file" : "item"
 }
 
+/** Deterministic, sanitized save location under the plugin data directory. */
+export const attachmentSavePath = (dataDir: string, messageId: string, attachmentKey: string, name: string): string => {
+  const digest = createHash("sha256")
+    .update(messageId)
+    .update("\u0000")
+    .update(attachmentKey)
+    .digest("hex")
+    .slice(0, 16)
+  const cleaned = displayAttachmentName(name)
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .replace(/^\.+/, "")
+    .trim()
+  const extension = /\.[A-Za-z0-9]{1,16}$/.exec(cleaned)?.[0] ?? ""
+  let base =
+    (extension ? cleaned.slice(0, -extension.length) : cleaned)
+      .replace(/[. ]+$/, "")
+      .slice(0, Math.max(1, 120 - extension.length)) || "attachment"
+  // Windows device names are not files: prefix them so the saved path is real.
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9]|conin\$|conout\$)$/i.test(base)) base = `_${base}`
+  return path.join(dataDir, "attachments", digest, `${base}${extension}`)
+}
+
 const limitAttachment = (value: AttachmentText, maxChars: number): AttachmentText => {
   const cut = truncateAttachmentText(value.text, maxChars)
   return { ...value, text: cut.text, truncated: value.truncated || cut.truncated }
@@ -530,6 +556,78 @@ export class EwsBackend implements MailBackend {
     }
   }
 
+  private async loadFileBytes(selected: Attachment, info: AttachmentInfo, signal?: AbortSignal): Promise<Buffer> {
+    if (info.size > MAX_READ_ATTACHMENT_BYTES) {
+      throw new Error(
+        `attachment is too large to read: ${safeAttachmentName(info.name)} is ${Math.ceil(info.size / 1024 / 1024)} MB ` +
+          `(max ${MAX_READ_ATTACHMENT_BYTES / 1024 / 1024} MB)`,
+      )
+    }
+    const file = selected as FileAttachment
+    await file.Load()
+    signal?.throwIfAborted()
+    const content = safe(() => file.Base64Content ?? "", "")
+    if (content === "") throw new Error("attachment content is empty or unavailable")
+    if (content.length > Math.ceil(MAX_READ_ATTACHMENT_BYTES / 3) * 4 + 8) {
+      throw new Error(
+        `attachment is too large to read: ${Math.ceil((content.length * 3) / 4 / 1024 / 1024)} MB ` +
+          `(max ${MAX_READ_ATTACHMENT_BYTES / 1024 / 1024} MB)`,
+      )
+    }
+    const data = Buffer.from(content, "base64")
+    if (data.length > MAX_READ_ATTACHMENT_BYTES) {
+      throw new Error(
+        `attachment is too large to read: ${Math.ceil(data.length / 1024 / 1024)} MB ` +
+          `(max ${MAX_READ_ATTACHMENT_BYTES / 1024 / 1024} MB)`,
+      )
+    }
+    return data
+  }
+
+  async saveAttachment(input: {
+    id: string
+    attachmentId?: string
+    index?: number
+    signal?: AbortSignal
+  }): Promise<SavedAttachment> {
+    const id = checkItemId(input.id)
+    if (input.attachmentId !== undefined && input.index !== undefined) {
+      throw new Error("provide either attachmentId or index, not both")
+    }
+    const attachments = await this.loadAttachmentCollection(id)
+    if (attachments.length === 0) throw new Error("message has no attachments")
+    let position = -1
+    if (input.attachmentId !== undefined) {
+      const wanted = checkAttachmentId(input.attachmentId)
+      position = attachments.findIndex(
+        (attachment) => safe(() => (attachment as unknown as EwsAttachmentInfo).Id ?? "", "") === wanted,
+      )
+      if (position < 0) throw new Error(`attachment not found: ${wanted}`)
+    } else {
+      const index = input.index
+      if (index === undefined || !Number.isInteger(index) || index < 0 || index >= attachments.length) {
+        throw new Error(`attachment index must be an integer from 0 to ${attachments.length - 1}`)
+      }
+      position = index
+    }
+    const selected = attachments[position]
+    if (!selected) throw new Error("attachment not found")
+    const info = attachmentInfo(selected as unknown as EwsAttachmentInfo, attachmentKind(selected))
+    if (info.kind !== "file") throw new Error("attachment is an embedded message, not a file")
+    const data = await this.loadFileBytes(selected, info, input.signal)
+    const key = info.id === "" ? `index:${position}` : info.id
+    const target = attachmentSavePath(this.config.dataDir, id, key, info.name || "attachment")
+    await mkdir(path.dirname(target), { recursive: true })
+    await writeFile(target, data)
+    return {
+      path: target,
+      // The written name may be shortened/sanitized; `path` is authoritative.
+      name: path.basename(target),
+      size: data.length,
+      sha256: createHash("sha256").update(data).digest("hex"),
+    }
+  }
+
   async listAttachments(input: { id: string }): Promise<AttachmentInfo[]> {
     const id = checkItemId(input.id)
     const attachments = await this.loadAttachmentCollection(id)
@@ -543,6 +641,7 @@ export class EwsBackend implements MailBackend {
     attachmentId?: string
     index?: number
     maxChars?: number
+    sheet?: string
     signal?: AbortSignal
   }): Promise<AttachmentText> {
     const id = checkItemId(input.id)
@@ -554,7 +653,7 @@ export class EwsBackend implements MailBackend {
       Math.max(Math.trunc(input.maxChars ?? DEFAULT_MAX_CHARS) || DEFAULT_MAX_CHARS, MIN_MAX_CHARS),
       MAX_MAX_CHARS,
     )
-    if (cacheEnabled && input.attachmentId !== undefined) {
+    if (cacheEnabled && input.sheet === undefined && input.attachmentId !== undefined) {
       const cached = this.store?.getAttachmentText(id, checkAttachmentId(input.attachmentId))
       if (cached) {
         input.signal?.throwIfAborted()
@@ -583,7 +682,7 @@ export class EwsBackend implements MailBackend {
     if (!selected) throw new Error("attachment not found")
     const info = attachmentInfo(selected as unknown as EwsAttachmentInfo, attachmentKind(selected))
     if (info.kind !== "file") throw new Error("attachment is an embedded message, not a file")
-    if (cacheEnabled) {
+    if (cacheEnabled && input.sheet === undefined) {
       const cached = info.id === "" ? undefined : this.store?.getAttachmentText(id, info.id)
       if (cached) {
         input.signal?.throwIfAborted()
@@ -597,31 +696,18 @@ export class EwsBackend implements MailBackend {
       )
     }
 
-    const file = selected as FileAttachment
-    await file.Load()
-    input.signal?.throwIfAborted()
-    const content = safe(() => file.Base64Content ?? "", "")
-    if (content === "") throw new Error("attachment content is empty or unavailable")
-    if (content.length > Math.ceil(MAX_READ_ATTACHMENT_BYTES / 3) * 4 + 8) {
-      throw new Error(
-        `attachment is too large to read: ${Math.ceil((content.length * 3) / 4 / 1024 / 1024)} MB ` +
-          `(max ${MAX_READ_ATTACHMENT_BYTES / 1024 / 1024} MB)`,
-      )
-    }
-    const data = Buffer.from(content, "base64")
-    if (data.length > MAX_READ_ATTACHMENT_BYTES) {
-      throw new Error(
-        `attachment is too large to read: ${Math.ceil(data.length / 1024 / 1024)} MB ` +
-          `(max ${MAX_READ_ATTACHMENT_BYTES / 1024 / 1024} MB)`,
-      )
-    }
+    const data = await this.loadFileBytes(selected, info, input.signal)
     const extracted = await extractAttachmentText({
       filename: info.name || "attachment",
       contentType: info.contentType,
       data,
       maxChars: cacheEnabled ? MAX_MAX_CHARS : requested,
+      ...(input.sheet ? { sheet: input.sheet } : {}),
       ...(input.signal ? { signal: input.signal } : {}),
     })
+    if (input.sheet !== undefined && extracted.kind !== "excel") {
+      throw new Error("sheet is only supported for Excel attachments")
+    }
     const result: AttachmentText = {
       messageId: id,
       attachment: info,
@@ -632,7 +718,7 @@ export class EwsBackend implements MailBackend {
       ...(extracted.sheets ? { sheets: extracted.sheets } : {}),
       ...(extracted.note ? { note: extracted.note } : {}),
     }
-    if (cacheEnabled && info.id !== "") this.store?.putAttachmentText(result)
+    if (cacheEnabled && input.sheet === undefined && info.id !== "") this.store?.putAttachmentText(result)
     return limitAttachment(result, requested)
   }
 

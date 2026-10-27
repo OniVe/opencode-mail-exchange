@@ -94,6 +94,13 @@ export interface AttachmentInfo {
   kind: "file" | "item"
 }
 
+export interface SavedAttachment {
+  path: string
+  name: string
+  size: number
+  sha256: string
+}
+
 export interface AttachmentText {
   messageId: string
   attachment: AttachmentInfo
@@ -149,8 +156,17 @@ export interface MailBackend {
     attachmentId?: string
     index?: number
     maxChars?: number
+    /** Excel only: worksheet name or 1-based index. */
+    sheet?: string
     signal?: AbortSignal
   }): Promise<AttachmentText>
+  /** Download one file attachment to `<dataDir>/attachments/...` and return its path. */
+  saveAttachment(input: {
+    id: string
+    attachmentId?: string
+    index?: number
+    signal?: AbortSignal
+  }): Promise<SavedAttachment>
   /** Soft-delete moves to Deleted Items; hard-delete is permanent. */
   deleteMessages(input: { ids: string[]; hard?: boolean }): Promise<DeleteResult>
   /** Permanently empties Deleted Items (EWS `EmptyFolder` + `HardDelete`). */

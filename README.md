@@ -42,7 +42,7 @@ Reads and sends mail, lists calendar events and contacts from an on-prem Exchang
 NTLM. Runs inside OpenCode V2 as a native TypeScript plugin: Bun executes `src/index.ts` directly, no build step.
 
 Verified on Exchange 2016 (build 15.1.2507.6), NTLMv2, internal CA. Bun 1.4.2, `@opencode/plugin` 2.0.26.
-Attachment extraction is pure JS (no native modules); CI runs on Linux, Windows and macOS. 268 tests.
+Attachment extraction is pure JS (no native modules); CI runs on Linux, Windows and macOS. 276 tests.
 
 ## Features
 
@@ -199,7 +199,8 @@ Top-level options are inherited by `accounts[]`; per-account values win, except 
 | `mail_list` | messages in a folder (metadata incl. `size`; `attachmentCount` when known; paging) |
 | `mail_search` | local FTS + EWS body search (Inbox), merged and deduplicated; same fields as `mail_list` |
 | `mail_get` | message + body; `size` (when known), `attachmentCount` (when known), `fetched` / `bodyCached` |
-| `mail_read_attachment` | list attachments, or extract text from `.doc`/`.docx`, `.xls`/`.xlsx`, `.pdf`/plain text (`index` or `attachmentId`) |
+| `mail_read_attachment` | list attachments, or extract text from `.doc`/`.docx`, `.xls`/`.xlsx`, `.pdf`/plain text (`index` or `attachmentId`; `sheet` for Excel) |
+| `mail_save_attachment` | download one file attachment to `<dataDir>/attachments/...` and return `path`, `size`, `sha256` |
 | `mail_delete` | delete by ids; soft (move to Deleted Items; the old id becomes invalid) or `hard: true` (permanent) |
 | `mail_empty_deleted` | permanently delete top-level items in Deleted Items (subfolders remain); requires `confirm: true` |
 | `mail_sync` | incremental `SyncFolderItems`; `{synced, complete}` |
@@ -243,14 +244,18 @@ is positional and can point to another file if the message changed. Supported fo
 `mc:AlternateContent`: the first `mc:Choice` that yields text wins; later choices and `mc:Fallback` are ignored.
 
 Reading is bounded: 20 MiB per attachment, the first 200 PDF pages (`truncated: true` when more), ZIP caps of
-32 MiB per required entry and 64 MiB total, 50 sheets / 5,000 rows / 100,000 cells / 200 columns, and 500,000
-characters maximum (`maxChars`, default 100,000, min 1,000). Extracted text is cut with `truncated: true`; a
+32 MiB per required entry and 64 MiB total, 50 sheets / 5,000 rows / 500,000 cells / 1,000 columns, and 1,000,000
+characters maximum (`maxChars`, default 100,000, min 1,000). For Excel, pass `sheet` (worksheet name or 1-based
+index) to extract one sheet with the full character budget; a sheet read bypasses the text cache. If a numeric
+sheet name exists, the exact name wins over the 1-based index. Extracted text is cut with `truncated: true`; a
 scanned PDF returns empty text with a note (no OCR). PDF and office (DOCX/XLSX/legacy) parsing runs in a worker
 (15 s timeout); abort terminates it. Text attachments are decoded in-process. This keeps a crafted attachment
 from blocking the plugin event loop. Worker memory is not capped by the Bun runtime: peak scales with input
 (measured ~650 MB for a 17.7 MB legacy `.xls`), with the 20 MiB attachment size cap as the outer bound.
 Malformed XML (an undeclared namespace prefix or an undefined entity) is rejected with an error instead of
 being partially parsed.
+
+`mail_save_attachment` writes the original file under `<dataDir>/attachments/<hash>/<name>` (only there; the name is sanitized, the extension preserved) and returns its absolute path, written name, size and sha256, so an agent can parse large files with its own code. Same 20 MiB limit as reading.
 
 With `storage: full` the extracted text is cached on demand in `attachment_text` + `attachment_fts` (no
 background download) for messages already present in the local index (run `mail_sync` first). Repeated reads by
@@ -341,7 +346,7 @@ encryption is required. Encryption is planned in [docs/roadmap.md](docs/roadmap.
   per-attachment/count, not a total request cap: a 413 can still occur when the combined request exceeds the
   IIS/EWS limit. Memory ~3.5–4.2× the file size.
 - Attachment text reading: 20 MiB per file, first 200 PDF pages, 32 MiB/64 MiB ZIP caps, 50 sheets / 5,000
-  rows / 100,000 cells / 200 columns, 500,000 characters; legacy `.doc`/`.xls` supported; no OCR.
+  rows / 500,000 cells / 1,000 columns, 1,000,000 characters; per-sheet Excel reads; legacy `.doc`/`.xls`; no OCR.
 - Cold start: EWS import ~0.3 s; full plugin load ~0.4 s, RSS ~105 MB; first EWS call adds ~0.45 s (live).
 - Multiple mailboxes: one process, per-account credentials and SQLite, `AsyncLocalStorage` routing.
 

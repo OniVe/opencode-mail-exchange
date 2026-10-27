@@ -6,7 +6,10 @@ import { registerTools } from "../src/tools"
 import type { MailBackend } from "../src/types"
 
 let lastDelete: { ids: string[]; hard?: boolean } | undefined
-let lastAttachmentRead: { id: string; attachmentId?: string; index?: number; maxChars?: number } | undefined
+let lastAttachmentRead:
+  | { id: string; attachmentId?: string; index?: number; maxChars?: number; sheet?: string }
+  | undefined
+let lastAttachmentSave: { id: string; attachmentId?: string; index?: number } | undefined
 
 const backend: MailBackend = {
   listFolders: async () => [{ id: "1", name: "Inbox", unread: 2, total: 3 }],
@@ -44,6 +47,15 @@ const backend: MailBackend = {
   listAttachments: async () => [
     { id: "att1", name: "report.pdf", contentType: "application/pdf", size: 10, isInline: false, kind: "file" },
   ],
+  saveAttachment: async (input) => {
+    lastAttachmentSave = input
+    return {
+      path: "C:dataattachmentsabc\report.pdf",
+      name: "report.pdf",
+      size: 10,
+      sha256: "0".repeat(64),
+    }
+  },
   readAttachment: async (input) => {
     lastAttachmentRead = input
     if (input.index === 999) throw new Error("bad \u001b[31m red \u0000 nul")
@@ -135,6 +147,7 @@ describe("registerTools", () => {
       "search",
       "get",
       "read_attachment",
+      "save_attachment",
       "delete",
       "empty_deleted",
       "sync",
@@ -190,7 +203,21 @@ describe("registerTools", () => {
     expect(c1?.content).not.toContain("\u009b")
     expect(c1?.content).not.toContain("\u202e")
     await readAttachment?.execute({ messageId: "m1", index: 0, maxChars: 600_000 })
-    expect(lastAttachmentRead?.maxChars).toBe(500_000)
+    expect(lastAttachmentRead?.maxChars).toBe(600_000)
+    await readAttachment?.execute({ messageId: "m1", index: 0, sheet: "Data", maxChars: 1e9 })
+    expect(lastAttachmentRead?.maxChars).toBe(1_000_000)
+    expect(lastAttachmentRead?.sheet).toBe("Data")
+
+    const saveAttachment = registered.find((tool) => tool.name === "save_attachment")
+    const saved = await saveAttachment?.execute({ messageId: "m1", index: 0 })
+    expect(saved?.content).toContain("report.pdf")
+    expect(lastAttachmentSave).toEqual({ id: "m1", attachmentId: undefined, index: 0 })
+    expect((await saveAttachment?.execute({ messageId: "m1" }))?.content).toContain(
+      "provide either attachmentId or index",
+    )
+    expect((await saveAttachment?.execute({ messageId: "m1", attachmentId: "att1", index: 0 }))?.content).toContain(
+      "either attachmentId or index, not both",
+    )
 
     const folders = registered.find((tool) => tool.name === "folders")
     const originalList = backend.listFolders
@@ -241,7 +268,7 @@ describe("registerTools", () => {
     } as unknown as Plugin.Context
 
     await registerTools(ctx, coded)
-    expect(registered).toHaveLength(13)
+    expect(registered).toHaveLength(14)
     for (const tool of registered) expect(tool.options?.codemode).toBe(true)
   })
 
@@ -304,6 +331,7 @@ describe("registerTools", () => {
       search: "mail.read",
       get: "mail.read",
       read_attachment: "mail.read",
+      save_attachment: "mail.read",
       delete: "mail.delete",
       empty_deleted: "mail.delete",
       sync: "mail.read",

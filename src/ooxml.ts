@@ -359,8 +359,8 @@ const sheetFilesFrom = (
 
 export const MAX_SHEETS = 50
 export const MAX_SHEET_ROWS = 5_000
-export const MAX_SHEET_CELLS = 100_000
-export const MAX_SHEET_COLUMNS = 200
+export const MAX_SHEET_CELLS = 500_000
+export const MAX_SHEET_COLUMNS = 1000
 
 const MAX_SHARED_STRINGS = 200_000
 
@@ -543,10 +543,25 @@ const decodeXmlBytes = (data: Uint8Array): string => {
   return new TextDecoder("utf-8").decode(data)
 }
 
+export const pickSheetIndex = (names: string[], selector: string): number => {
+  const wanted = selector.trim()
+  const index = names.indexOf(wanted)
+  if (index >= 0) return index
+  const numeric = /^\d+$/.test(wanted) ? Number(wanted) : Number.NaN
+  if (Number.isInteger(numeric) && numeric >= 1 && numeric <= names.length) return numeric - 1
+  const shown = names
+    .slice(0, 20)
+    .map((name) => name.slice(0, 60))
+    .join(", ")
+  const available = names.length > 20 ? `${shown}, … (+${names.length - 20} more)` : shown
+  throw new Error(`sheet not found: ${wanted.slice(0, 60)} (available: ${available})`)
+}
+
 export const extractXlsxText = (
   entries: Record<string, Uint8Array>,
   maxChars: number,
   signal?: AbortSignal,
+  sheet?: string,
 ): XlsxText => {
   const sheetFiles = Object.keys(entries)
     .filter((name) => /^xl\/worksheets\/sheet\d+\.xml$/.test(name))
@@ -567,8 +582,16 @@ export const extractXlsxText = (
     ? parseRelationships(decode("xl/_rels/workbook.xml.rels"), signal)
     : new Map<string, string>()
   const allSheets = sheetFilesFrom(workbook, rels, sheetFiles)
-  const sheets = allSheets.slice(0, MAX_SHEETS)
-  const limitedBySheets = allSheets.length > MAX_SHEETS
+  const wantedIndex =
+    sheet === undefined
+      ? -1
+      : pickSheetIndex(
+          allSheets.map((item) => item.name),
+          sheet,
+        )
+  const selected = wantedIndex >= 0 ? allSheets.slice(wantedIndex, wantedIndex + 1) : allSheets.slice(0, MAX_SHEETS)
+  const sheets = selected
+  const limitedBySheets = sheet === undefined && allSheets.length > MAX_SHEETS
   const shared = entries["xl/sharedStrings.xml"]
     ? parseSharedStrings(decode("xl/sharedStrings.xml"), Math.max(maxChars * 4, 4096), signal)
     : { values: [], truncated: false }

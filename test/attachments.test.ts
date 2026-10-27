@@ -344,7 +344,7 @@ describe("Excel (.xlsx)", () => {
     await expect(extract("empty.xlsx", "", xlsx({ "xl/workbook.xml": "<workbook/>" }))).rejects.toThrow(/no worksheets/)
   })
 
-  test("keeps later rows when a cell is beyond column 200 and notes the columns", async () => {
+  test("keeps later rows when a cell is beyond the column cap and notes the columns", async () => {
     const result = await extract(
       "wide.xlsx",
       "",
@@ -353,12 +353,12 @@ describe("Excel (.xlsx)", () => {
           '<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" r:id="rId1"/></sheets></workbook>',
         "xl/worksheets/sheet1.xml":
           '<worksheet><sheetData><row r="1"><c r="A1"><v>1</v></c></row>' +
-          '<row r="2"><c r="IV2"><v>9</v></c></row>' +
+          '<row r="2"><c r="ZZZ2"><v>9</v></c></row>' +
           '<row r="3"><c r="A3"><v>3</v></c></row></sheetData></worksheet>',
       }),
     )
     expect(result.text).toContain("3")
-    expect(result.note).toContain("Columns beyond 200")
+    expect(result.note).toContain("Columns beyond 1000")
   })
 
   test("decodes a UTF-16 worksheet", async () => {
@@ -438,6 +438,64 @@ describe("Excel (.xlsx)", () => {
     expect(result.sheets).toEqual(["Data"])
     expect(result.text).toContain("PFXATTR")
   })
+
+  test("extracts a single worksheet by name or index", async () => {
+    const data = xlsx({
+      "xl/workbook.xml": '<workbook><sheets><sheet name="First"/><sheet name="Second"/></sheets></workbook>',
+      "xl/worksheets/sheet1.xml": "<worksheet><sheetData><row><c><v>111</v></c></row></sheetData></worksheet>",
+      "xl/worksheets/sheet2.xml": "<worksheet><sheetData><row><c><v>222</v></c></row></sheetData></worksheet>",
+    })
+    const byName = await extractAttachmentText({
+      filename: "book.xlsx",
+      contentType: "",
+      data,
+      maxChars: 100_000,
+      sheet: "Second",
+    })
+    expect(byName.sheets).toEqual(["Second"])
+    expect(byName.text).toContain("222")
+    expect(byName.text).not.toContain("111")
+    const byIndex = await extractAttachmentText({
+      filename: "book.xlsx",
+      contentType: "",
+      data,
+      maxChars: 100_000,
+      sheet: "2",
+    })
+    expect(byIndex.text).toContain("222")
+    await expect(
+      extractAttachmentText({ filename: "book.xlsx", contentType: "", data, maxChars: 100_000, sheet: "Missing" }),
+    ).rejects.toThrow(/sheet not found: Missing \(available: First, Second\)/)
+  })
+
+  test("prefers an exact numeric sheet name over a 1-based index", async () => {
+    const data = xlsx({
+      "xl/workbook.xml": '<workbook><sheets><sheet name="X"/><sheet name="Y"/><sheet name="2"/></sheets></workbook>',
+      "xl/worksheets/sheet1.xml": "<worksheet><sheetData><row><c><v>111</v></c></row></sheetData></worksheet>",
+      "xl/worksheets/sheet2.xml": "<worksheet><sheetData><row><c><v>222</v></c></row></sheetData></worksheet>",
+      "xl/worksheets/sheet3.xml": "<worksheet><sheetData><row><c><v>333</v></c></row></sheetData></worksheet>",
+    })
+    const result = await extractAttachmentText({
+      filename: "numeric.xlsx",
+      contentType: "",
+      data,
+      maxChars: 100_000,
+      sheet: "2",
+    })
+    expect(result.sheets).toEqual(["2"])
+    expect(result.text).toContain("333")
+  })
+
+  test("reads columns beyond the old 200-column limit", async () => {
+    const data = xlsx({
+      "xl/worksheets/sheet1.xml":
+        '<worksheet><sheetData><row><c r="A1"><v>1</v></c><c r="ZZ1"><v>9</v></c></row></sheetData></worksheet>',
+    })
+    const result = await extract("wide.xlsx", "", data)
+    expect(result.text).toContain("1")
+    expect(result.text).toContain("9")
+    expect(result.note ?? "").not.toContain("Columns beyond")
+  })
 })
 
 describe("PDF", () => {
@@ -513,6 +571,33 @@ describe("Legacy binary Word/Excel", () => {
     expect(result.text).toContain("Name\tValue")
     expect(result.text).toContain("Alpha\t42")
     expect(result.text).toContain("Beta\tTRUE")
+  })
+
+  test("extracts a single sheet from .xls by name", async () => {
+    const XLSX = await import("@e965/xlsx")
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([["first"]]), "First")
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([["second"]]), "Second")
+    const data = new Uint8Array(XLSX.write(workbook, { bookType: "xls", type: "buffer" }) as Buffer)
+    const result = await extractAttachmentText({
+      filename: "legacy.xls",
+      contentType: "application/vnd.ms-excel",
+      data,
+      maxChars: 100_000,
+      sheet: "Second",
+    })
+    expect(result.sheets).toEqual(["Second"])
+    expect(result.text).toContain("second")
+    expect(result.text).not.toContain("first")
+    await expect(
+      extractAttachmentText({
+        filename: "legacy.xls",
+        contentType: "application/vnd.ms-excel",
+        data,
+        maxChars: 100_000,
+        sheet: "Nope",
+      }),
+    ).rejects.toThrow(/^sheet not found: Nope/)
   })
 
   test("rejects a corrupt .xls", async () => {

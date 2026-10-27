@@ -8,13 +8,14 @@ import {
   MAX_SHEET_COLUMNS,
   MAX_SHEET_ROWS,
   MAX_SHEETS,
+  pickSheetIndex,
 } from "./ooxml"
 
 /** Reading is bounded independently from sending: a huge attachment must not exhaust the plugin. */
 export const MAX_READ_ATTACHMENT_BYTES = 20 * 1024 * 1024
 export const MIN_MAX_CHARS = 1_000
 export const DEFAULT_MAX_CHARS = 100_000
-export const MAX_MAX_CHARS = 500_000
+export const MAX_MAX_CHARS = 1_000_000
 export const MAX_PDF_PAGES = 200
 
 const MAX_ZIP_ENTRY_BYTES = 32 * 1024 * 1024
@@ -46,6 +47,8 @@ export interface ExtractInput {
   contentType: string
   data: Uint8Array
   maxChars: number
+  /** Excel only: sheet name or 1-based index; other sheets are not extracted. */
+  sheet?: string
   signal?: AbortSignal
   /** @internal Set inside the office worker so it does not spawn another worker. */
   fromWorker?: boolean
@@ -301,7 +304,12 @@ const extractDocx = async (data: Uint8Array, maxChars: number, signal?: AbortSig
   return { kind: "word", text: result.text, truncated: result.truncated }
 }
 
-const extractXlsx = async (data: Uint8Array, maxChars: number, signal?: AbortSignal): Promise<ExtractResult> => {
+const extractXlsx = async (
+  data: Uint8Array,
+  maxChars: number,
+  signal?: AbortSignal,
+  sheet?: string,
+): Promise<ExtractResult> => {
   const zip = await readZip(
     data,
     (name) =>
@@ -314,7 +322,7 @@ const extractXlsx = async (data: Uint8Array, maxChars: number, signal?: AbortSig
   const oversized = [...zip.oversized].find((name) => name.startsWith("xl/"))
   if (oversized) throw new Error(`attachment part is too large: ${oversized}`)
   if (zip.tooMany) throw new Error("attachment has too many ZIP entries")
-  const result = extractXlsxText(zip.files, maxChars, signal)
+  const result = extractXlsxText(zip.files, maxChars, signal, sheet)
   const notes: string[] = []
   if (result.limited || result.truncated) notes.push("Content beyond the extraction limits is omitted.")
   if (result.columnsLimited) notes.push(`Columns beyond ${MAX_SHEET_COLUMNS} are omitted.`)
@@ -357,6 +365,7 @@ const extractLegacyXls = async (
   maxChars: number,
   signal?: AbortSignal,
   contentType = "",
+  sheet?: string,
 ): Promise<ExtractResult> => {
   signal?.throwIfAborted()
   if (!isOle2(data)) {
@@ -397,9 +406,12 @@ const extractLegacyXls = async (
       console.warn = originalWarn
     }
     const limit = Math.max(maxChars * 4, 4096)
-    const sheets = workbook.SheetNames.slice(0, MAX_SHEETS)
-    let truncated = workbook.SheetNames.length > MAX_SHEETS
-    let limited = workbook.SheetNames.length > MAX_SHEETS
+    const names = workbook.SheetNames
+    const wantedIndex = sheet === undefined ? -1 : pickSheetIndex(names, sheet)
+    const selected = wantedIndex >= 0 ? names.slice(wantedIndex, wantedIndex + 1) : names.slice(0, MAX_SHEETS)
+    const sheets = selected
+    let truncated = sheet === undefined && names.length > MAX_SHEETS
+    let limited = sheet === undefined && names.length > MAX_SHEETS
     let columnsLimited = false
     const blocks: string[] = []
     let chars = 0
@@ -455,6 +467,7 @@ const extractLegacyXls = async (
       ...(notes.length > 0 ? { note: notes.join(" ") } : {}),
     }
   } catch (error) {
+    if (error instanceof Error && error.message.startsWith("sheet not found:")) throw error
     throw legacyError("Excel workbook", error)
   }
 }
@@ -568,6 +581,7 @@ const extractOfficeInWorker = (input: ExtractInput, maxChars: number): Promise<E
           contentType: input.contentType,
           data: input.data,
           maxChars,
+          ...(input.sheet ? { sheet: input.sheet } : {}),
           fromWorker: true,
         },
         // Bun ignores resourceLimits; memory is input-bound, not heap-capped (see risks.md).
@@ -641,11 +655,11 @@ export async function extractAttachmentText(input: ExtractInput): Promise<Extrac
     detected.kind === "legacy"
       ? detected.format === "doc"
         ? await extractLegacyDoc(input.data, maxChars, input.signal)
-        : await extractLegacyXls(input.data, maxChars, input.signal, input.contentType)
+        : await extractLegacyXls(input.data, maxChars, input.signal, input.contentType, input.sheet)
       : detected.kind === "word"
         ? await extractDocx(input.data, maxChars, input.signal)
         : detected.kind === "excel"
-          ? await extractXlsx(input.data, maxChars, input.signal)
+          ? await extractXlsx(input.data, maxChars, input.signal, input.sheet)
           : detected.kind === "pdf"
             ? await extractPdf(input.data, maxChars, input.signal)
             : {

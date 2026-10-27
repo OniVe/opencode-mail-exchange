@@ -247,7 +247,7 @@ export async function registerTools(
     add({
       name: "read_attachment",
       description:
-        "List attachments of one message, or read an attachment as text. Without attachmentId/index returns the attachment metadata list; with index (position in the current list) or attachmentId extracts text from .doc/.docx, .xls/.xlsx, .pdf or plain text. Scanned PDFs are not OCRed; use attachmentId for stable re-reads.",
+        "List attachments of one message, or read an attachment as text. Without attachmentId/index returns the attachment metadata list; with index (position in the current list) or attachmentId extracts text from .doc/.docx, .xls/.xlsx, .pdf or plain text. For Excel, pass sheet (name or 1-based index) to extract one worksheet fully. Scanned PDFs are not OCRed; use attachmentId for stable re-reads.",
       input: {
         type: "object",
         properties: {
@@ -273,8 +273,14 @@ export async function registerTools(
           maxChars: {
             type: "integer",
             minimum: 1000,
-            maximum: 500000,
+            maximum: 1000000,
             description: "Maximum extracted text length in characters (default 100000)",
+          },
+          sheet: {
+            type: "string",
+            minLength: 1,
+            maxLength: 200,
+            description: "Excel only: worksheet name or 1-based index to extract instead of all sheets",
           },
         },
         required: ["messageId"],
@@ -287,6 +293,7 @@ export async function registerTools(
           attachmentId?: unknown
           index?: unknown
           maxChars?: unknown
+          sheet?: unknown
         }
         try {
           if (typeof typed.messageId !== "string" || typed.messageId.trim() === "") {
@@ -316,7 +323,10 @@ export async function registerTools(
             }
             index = value
           }
-          const maxChars = clampInt(typed.maxChars, 100_000, 1_000, 500_000)
+          const maxChars = clampInt(typed.maxChars, 100_000, 1_000, 1_000_000)
+          const sheet =
+            typeof typed.sheet === "string" && typed.sheet.trim() !== "" ? typed.sheet.trim().slice(0, 200) : undefined
+          if (typed.sheet !== undefined && sheet === undefined) throw new Error("sheet must be a non-empty string")
           return {
             content: json(
               await run(typed, (backend) =>
@@ -325,8 +335,85 @@ export async function registerTools(
                   attachmentId,
                   index,
                   maxChars,
+                  sheet,
                   signal: currentSignal.getStore(),
                 }),
+              ),
+            ),
+          }
+        } catch (error) {
+          return failure(error)
+        }
+      },
+    })
+
+    add({
+      name: "save_attachment",
+      description:
+        "Download one file attachment from a message to the plugin data directory and return its absolute path, size and sha256. Use this when the agent needs the original file (for example, to parse a large Excel workbook with its own code). Only file attachments; max 20 MiB.",
+      input: {
+        type: "object",
+        properties: {
+          account: accountField,
+          messageId: {
+            type: "string",
+            minLength: 1,
+            maxLength: 2048,
+            description: "EWS item id from mail_list/mail_search",
+          },
+          attachmentId: {
+            type: "string",
+            minLength: 1,
+            maxLength: 8192,
+            description: "Attachment id from the metadata list (alternative to index)",
+          },
+          index: {
+            type: "integer",
+            minimum: 0,
+            maximum: 999,
+            description: "Zero-based position in the current attachment list",
+          },
+        },
+        required: ["messageId"],
+        additionalProperties: false,
+      },
+      options: { namespace: "mail", codemode, permission: "mail.read" },
+      execute: async (input) => {
+        const typed = input as AccountInput & {
+          messageId?: unknown
+          attachmentId?: unknown
+          index?: unknown
+        }
+        try {
+          if (typeof typed.messageId !== "string" || typed.messageId.trim() === "") {
+            throw new Error("messageId must be a non-empty string")
+          }
+          const messageId = typed.messageId
+          const attachmentId =
+            typeof typed.attachmentId === "string" && typed.attachmentId.trim() !== "" ? typed.attachmentId : undefined
+          if (typed.attachmentId !== undefined && attachmentId === undefined) {
+            throw new Error("attachmentId must be a non-empty string")
+          }
+          const hasIndex = typed.index !== undefined
+          if (attachmentId && hasIndex) throw new Error("provide either attachmentId or index, not both")
+          if (!attachmentId && !hasIndex) throw new Error("provide either attachmentId or index")
+          let index: number | undefined
+          if (hasIndex) {
+            const value =
+              typeof typed.index === "number"
+                ? typed.index
+                : typeof typed.index === "string"
+                  ? Number(typed.index)
+                  : Number.NaN
+            if (!Number.isInteger(value) || value < 0 || value > 999) {
+              throw new Error("index must be an integer from 0 to 999")
+            }
+            index = value
+          }
+          return {
+            content: json(
+              await run(typed, (backend) =>
+                backend.saveAttachment({ id: messageId, attachmentId, index, signal: currentSignal.getStore() }),
               ),
             ),
           }
