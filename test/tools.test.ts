@@ -6,6 +6,7 @@ import { registerTools } from "../src/tools"
 import type { MailBackend } from "../src/types"
 
 let lastDelete: { ids: string[]; hard?: boolean } | undefined
+let lastAttachmentRead: { id: string; attachmentId?: string; index?: number; maxChars?: number } | undefined
 
 const backend: MailBackend = {
   listFolders: async () => [{ id: "1", name: "Inbox", unread: 2, total: 3 }],
@@ -40,6 +41,31 @@ const backend: MailBackend = {
     truncated: false,
     bodyCached: true,
   }),
+  listAttachments: async () => [
+    { id: "att1", name: "report.pdf", contentType: "application/pdf", size: 10, isInline: false, kind: "file" },
+  ],
+  readAttachment: async (input) => {
+    lastAttachmentRead = input
+    if (input.index === 999) throw new Error("bad \u001b[31m red \u0000 nul")
+    if (input.index === 998) throw new Error("a\ud83d\ude00".repeat(400))
+    if (input.index === 997) throw Object.assign(new Error("msg"), { code: "E\u001b[1mCODE\u009bC1" })
+    if (input.index === 996) throw new Error("m\u009bC1\u202eRTL")
+    return {
+      messageId: input.id,
+      attachment: {
+        id: "att1",
+        name: "report.pdf",
+        contentType: "application/pdf",
+        size: 10,
+        isInline: false,
+        kind: "file",
+      },
+      kind: "pdf",
+      text: "PDF text",
+      truncated: false,
+      pages: 1,
+    }
+  },
   send: async () => ({ sent: true }),
   saveDraft: async () => ({ id: "draft" }),
   deleteMessages: async (input) => {
@@ -108,6 +134,7 @@ describe("registerTools", () => {
       "list",
       "search",
       "get",
+      "read_attachment",
       "delete",
       "empty_deleted",
       "sync",
@@ -132,6 +159,51 @@ describe("registerTools", () => {
     expect((await search?.execute({ query: "a".repeat(512) }))?.content).toContain("[]")
     expect((await search?.execute({ query: "a".repeat(513) }))?.content).toContain("query is too long")
     expect((await search?.execute({ query: 123 }))?.content).toContain("query must be a string")
+
+    const readAttachment = registered.find((tool) => tool.name === "read_attachment")
+    expect((await readAttachment?.execute({ messageId: "m1" }))?.content).toContain('"att1"')
+    const readResult = await readAttachment?.execute({ messageId: "m1", index: 0, maxChars: 5_000 })
+    expect(readResult?.content).toContain("PDF text")
+    expect(lastAttachmentRead).toEqual({ id: "m1", attachmentId: undefined, index: 0, maxChars: 5_000 })
+    expect((await readAttachment?.execute({ messageId: "m1", attachmentId: "att1", index: 0 }))?.content).toContain(
+      "either attachmentId or index",
+    )
+    expect((await readAttachment?.execute({ messageId: 123 }))?.content).toContain(
+      "messageId must be a non-empty string",
+    )
+    expect((await readAttachment?.execute({ messageId: "m1", index: 1000 }))?.content).toContain(
+      "index must be an integer from 0 to 999",
+    )
+    expect((await readAttachment?.execute({ messageId: "m1", index: null }))?.content).toContain(
+      "index must be an integer from 0 to 999",
+    )
+    const unsafe = await readAttachment?.execute({ messageId: "m1", index: 999 })
+    expect(unsafe?.content).toContain("ERROR:")
+    expect(unsafe?.content).not.toContain("\u001b")
+    expect(unsafe?.content).not.toContain("\u0000")
+    const longEmoji = await readAttachment?.execute({ messageId: "m1", index: 998 })
+    expect(longEmoji?.content).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/)
+    const unsafeCode = await readAttachment?.execute({ messageId: "m1", index: 997 })
+    expect(unsafeCode?.content).not.toContain("\u001b")
+    expect(unsafeCode?.content).not.toContain("\u009b")
+    const c1 = await readAttachment?.execute({ messageId: "m1", index: 996 })
+    expect(c1?.content).not.toContain("\u009b")
+    expect(c1?.content).not.toContain("\u202e")
+    await readAttachment?.execute({ messageId: "m1", index: 0, maxChars: 600_000 })
+    expect(lastAttachmentRead?.maxChars).toBe(500_000)
+
+    const folders = registered.find((tool) => tool.name === "folders")
+    const originalList = backend.listFolders
+    backend.listFolders = async () => {
+      throw { stack: "Error\n    at C:\\secret\\file.js:1:1" }
+    }
+    try {
+      const result = await folders?.execute({})
+      expect(result?.content).not.toContain("secret")
+      expect(result?.content).not.toContain("    at ")
+    } finally {
+      backend.listFolders = originalList
+    }
 
     const remove = registered.find((tool) => tool.name === "delete")
     expect((await remove?.execute({ ids: ["1"] }))?.content).toContain('"deleted": 1')
@@ -169,7 +241,7 @@ describe("registerTools", () => {
     } as unknown as Plugin.Context
 
     await registerTools(ctx, coded)
-    expect(registered).toHaveLength(12)
+    expect(registered).toHaveLength(13)
     for (const tool of registered) expect(tool.options?.codemode).toBe(true)
   })
 
@@ -231,6 +303,7 @@ describe("registerTools", () => {
       list: "mail.read",
       search: "mail.read",
       get: "mail.read",
+      read_attachment: "mail.read",
       delete: "mail.delete",
       empty_deleted: "mail.delete",
       sync: "mail.read",

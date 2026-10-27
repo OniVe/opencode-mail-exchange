@@ -28,6 +28,10 @@ describe("mergeSearchResults", () => {
         preview: "local preview",
         size: 100,
         attachmentCount: 2,
+        attachmentMatch: { id: "att-1", name: "invoice.pdf", snippet: "needle" },
+      }),
+      message("c", "2026-10-21T10:00:00Z", {
+        attachmentMatch: { id: "att-2", name: "notes.docx", snippet: "needle notes" },
       }),
     ]
     const remote = [
@@ -47,7 +51,7 @@ describe("mergeSearchResults", () => {
       message("b", "2026-10-22T10:00:00Z"),
     ]
     const merged = mergeSearchResults(local, remote, 10)
-    expect(merged.map((item) => item.id)).toEqual(["a", "b"])
+    expect(merged.map((item) => item.id)).toEqual(["a", "b", "c"])
     expect(merged[0]?.subject).toBe("remote subject")
     expect(merged[0]?.from).toBe("remote@example.com")
     expect(merged[0]?.received).toBe("2026-10-25T10:00:00Z")
@@ -61,6 +65,8 @@ describe("mergeSearchResults", () => {
     expect(merged[0]?.attachmentCount).toBe(3)
     // The cached preview is body-derived and may be longer than the EWS one.
     expect(merged[0]?.preview).toBe("local preview")
+    expect(merged[0]?.attachmentMatch).toEqual({ id: "att-1", name: "invoice.pdf", snippet: "needle" })
+    expect(merged[2]?.attachmentMatch).toEqual({ id: "att-2", name: "notes.docx", snippet: "needle notes" })
   })
 
   test("sorts newest first and respects the limit", () => {

@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite"
 import { mkdirSync } from "node:fs"
 import path from "node:path"
 import type { MailConfig } from "./config"
-import type { MessageDetail, MessageSummary } from "./types"
+import type { AttachmentText, MessageDetail, MessageSummary } from "./types"
 import { MAX_ITEM_SIZE } from "./types"
 
 interface MessageRow {
@@ -54,6 +54,29 @@ create table if not exists bodies (
   body_type text not null,
   truncated integer not null default 0,
   fetched_ts integer not null
+);
+create table if not exists attachment_text (
+  message_id text not null,
+  attachment_id text not null,
+  name text not null,
+  content_type text not null default '',
+  size integer not null default 0,
+  is_inline integer not null default 0,
+  kind text not null,
+  text text not null,
+  truncated integer not null default 0,
+  pages integer,
+  sheets text,
+  note text,
+  fetched_ts integer not null,
+  primary key (message_id, attachment_id)
+);
+create virtual table if not exists attachment_fts using fts5(
+  message_id unindexed,
+  attachment_id unindexed,
+  name,
+  text,
+  tokenize = 'unicode61'
 );
 create table if not exists sync_state (
   folder_id text primary key,
@@ -715,6 +738,9 @@ export interface Store {
   hasMessage(id: string): boolean
   /** Returns `false` when the message is not indexed: bodies are never stored on their own. */
   putBody(messageId: string, body: string, bodyType: "html" | "text", truncated: boolean): boolean
+  /** Cache extracted attachment text; only call for `storage: full` and indexed messages. */
+  putAttachmentText(input: AttachmentText): boolean
+  getAttachmentText(messageId: string, attachmentId: string): AttachmentText | undefined
   getSyncState(folderId: string): { token: string; lastSync: number } | undefined
   setSyncState(folderId: string, token: string): void
   clearSyncState(folderId: string): void
@@ -725,6 +751,7 @@ export interface Store {
 
 export function openStore(config: MailConfig): Store | undefined {
   if (config.storage === "off") return undefined
+  const attachmentCacheEnabled = config.storage === "full"
 
   mkdirSync(config.dataDir, { recursive: true })
   const db = new Database(path.join(config.dataDir, "mail.db"))
@@ -740,12 +767,24 @@ export function openStore(config: MailConfig): Store | undefined {
       // Column already exists (fresh schema or a previous run) — nothing to do.
     }
   }
+  if (!attachmentCacheEnabled) {
+    // Attachment text is a full-storage feature; a downgrade must not leave plaintext behind.
+    db.run("delete from attachment_text")
+    db.run("delete from attachment_fts")
+  }
 
   const dropFts = db.query("delete from messages_fts where msg_id = ?")
   const addFts = db.query(`
     insert into messages_fts (msg_id, subject, from_addr, preview, body)
     values (?, ?, ?, ?, coalesce((select body from bodies where message_id = ?), ''))
   `)
+
+  const dropAttachmentFts = db.query("delete from attachment_fts where message_id = ? and attachment_id = ?")
+  const dropAttachmentText = db.query("delete from attachment_text where message_id = ?")
+  const dropAttachment = (messageId: string): void => {
+    db.query("delete from attachment_fts where message_id = ?").run(messageId)
+    dropAttachmentText.run(messageId)
+  }
 
   const findRow = db.query("select * from messages where id = ? and deleted = 0")
 
@@ -782,6 +821,15 @@ export function openStore(config: MailConfig): Store | undefined {
       const receivedTs = Number.isFinite(Date.parse(message.received)) ? Date.parse(message.received) : 0
       const size = normalizeSize(message.size)
       const attachmentCount = normalizeAttachmentCount(message.attachmentCount)
+      const previous = findRow.get(message.id) as MessageRow | null
+      const nextHas = message.hasAttachments ? 1 : 0
+      if (
+        previous &&
+        (previous.has_attachments !== nextHas ||
+          (attachmentCount !== null && previous.attachment_count !== attachmentCount))
+      ) {
+        dropAttachment(message.id)
+      }
       insert.run(
         message.id,
         folderId,
@@ -817,6 +865,7 @@ export function openStore(config: MailConfig): Store | undefined {
     for (const id of ids) {
       mark.run(Date.now(), id)
       dropBody.run(id)
+      dropAttachment(id)
       dropFts.run(id)
     }
   })
@@ -877,6 +926,16 @@ export function openStore(config: MailConfig): Store | undefined {
       }
     }
     if (size === null && attachmentCount === null && hasAttachments === null && !clearCount) return
+    const current = db
+      .query("select has_attachments, attachment_count from messages where id = ? and deleted = 0")
+      .get(id) as { has_attachments: number; attachment_count: number | null } | null
+    if (
+      current &&
+      ((hasAttachments !== null && hasAttachments !== current.has_attachments) ||
+        (input.attachmentCount !== undefined && (attachmentCount ?? null) !== current.attachment_count))
+    ) {
+      dropAttachment(id)
+    }
     db.query(
       "update messages set size = coalesce(?, size), attachment_count = case when ? then null else coalesce(?, attachment_count) end, has_attachments = coalesce(?, has_attachments), updated_ts = ? where id = ? and deleted = 0",
     ).run(size, clearCount ? 1 : 0, attachmentCount, hasAttachments, Date.now(), id)
@@ -1017,7 +1076,48 @@ export function openStore(config: MailConfig): Store | undefined {
       // Exact date/email phrase first; only if it finds nothing, retry with prefixes.
       let rows = select.all(queries.primary, take)
       if (rows.length === 0 && queries.fallback) rows = select.all(queries.fallback, take)
-      return (rows as MessageRow[]).map(rowToSummary)
+      const summaries = (rows as MessageRow[]).map(rowToSummary)
+      const byId = new Map(summaries.map((summary) => [summary.id, summary]))
+      if (attachmentCacheEnabled) {
+        const attachmentSelect = db.query(`
+          select a.message_id as message_id, a.attachment_id as attachment_id, a.name as name,
+                 snippet(attachment_fts, 3, '[', ']', '…', 16) as snippet
+          from attachment_fts f
+          join attachment_text a on a.message_id = f.message_id and a.attachment_id = f.attachment_id
+          where attachment_fts match ?
+          limit ?
+        `)
+        const attachmentRows = (
+          query: string,
+        ): Array<{
+          message_id: string
+          attachment_id: string
+          name: string
+          snippet: string | null
+        }> => attachmentSelect.all(query, take) as never
+        let matches = attachmentRows(queries.primary)
+        if (matches.length === 0 && queries.fallback) matches = attachmentRows(queries.fallback)
+        for (const match of matches) {
+          const summary =
+            byId.get(match.message_id) ??
+            (() => {
+              const row = findRow.get(match.message_id) as MessageRow | null
+              return row ? rowToSummary(row) : undefined
+            })()
+          if (!summary) continue
+          if (!summary.attachmentMatch) {
+            summary.attachmentMatch = {
+              id: match.attachment_id,
+              name: match.name,
+              snippet: match.snippet ?? "",
+            }
+          }
+          byId.set(summary.id, summary)
+        }
+      }
+      return [...byId.values()]
+        .sort((a, b) => (Date.parse(b.received) || 0) - (Date.parse(a.received) || 0) || a.id.localeCompare(b.id))
+        .slice(0, take)
     },
     getMessage(id) {
       const row = findRow.get(id) as MessageRow | null
@@ -1058,6 +1158,92 @@ export function openStore(config: MailConfig): Store | undefined {
       addFts.run(messageId, existing.subject, existing.from_addr, existing.preview, messageId)
       return true
     },
+    putAttachmentText(input) {
+      if (!attachmentCacheEnabled) return false
+      if (input.attachment.id === "") return false
+      const existing = findRow.get(input.messageId) as MessageRow | null
+      if (!existing) return false
+      db.transaction(() => {
+        db.query(`
+          insert into attachment_text (message_id, attachment_id, name, content_type, size, is_inline, kind, text,
+                                       truncated, pages, sheets, note, fetched_ts)
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          on conflict(message_id, attachment_id) do update set
+            name = excluded.name, content_type = excluded.content_type, size = excluded.size,
+            is_inline = excluded.is_inline, kind = excluded.kind, text = excluded.text,
+            truncated = excluded.truncated, pages = excluded.pages, sheets = excluded.sheets,
+            note = excluded.note, fetched_ts = excluded.fetched_ts
+        `).run(
+          input.messageId,
+          input.attachment.id,
+          input.attachment.name,
+          input.attachment.contentType,
+          input.attachment.size,
+          input.attachment.isInline ? 1 : 0,
+          input.kind,
+          input.text,
+          input.truncated ? 1 : 0,
+          input.pages ?? null,
+          input.sheets ? JSON.stringify(input.sheets) : null,
+          input.note ?? null,
+          Date.now(),
+        )
+        dropAttachmentFts.run(input.messageId, input.attachment.id)
+        db.query("insert into attachment_fts (message_id, attachment_id, name, text) values (?, ?, ?, ?)").run(
+          input.messageId,
+          input.attachment.id,
+          input.attachment.name,
+          input.text,
+        )
+      })()
+      return true
+    },
+    getAttachmentText(messageId, attachmentId) {
+      if (!attachmentCacheEnabled) return undefined
+      const row = db
+        .query("select * from attachment_text where message_id = ? and attachment_id = ?")
+        .get(messageId, attachmentId) as {
+        message_id: string
+        attachment_id: string
+        name: string
+        content_type: string
+        size: number
+        is_inline: number
+        kind: string
+        text: string
+        truncated: number
+        pages: number | null
+        sheets: string | null
+        note: string | null
+      } | null
+      if (!row) return undefined
+      let sheets: string[] | undefined
+      if (row.sheets) {
+        try {
+          const parsed = JSON.parse(row.sheets) as unknown
+          if (Array.isArray(parsed) && parsed.every((value) => typeof value === "string")) sheets = parsed
+        } catch {
+          sheets = undefined
+        }
+      }
+      return {
+        messageId: row.message_id,
+        attachment: {
+          id: row.attachment_id,
+          name: row.name,
+          contentType: row.content_type,
+          size: row.size,
+          isInline: row.is_inline === 1,
+          kind: "file",
+        },
+        kind: row.kind as AttachmentText["kind"],
+        text: row.text,
+        truncated: row.truncated === 1,
+        ...(row.pages !== null ? { pages: row.pages } : {}),
+        ...(sheets ? { sheets } : {}),
+        ...(row.note ? { note: row.note } : {}),
+      }
+    },
     getSyncState(folderId) {
       const row = db.query("select token, last_sync_ts from sync_state where folder_id = ?").get(folderId) as {
         token: string
@@ -1088,17 +1274,28 @@ export function openStore(config: MailConfig): Store | undefined {
         "delete from messages_fts where msg_id in (select id from messages where received_ts > 0 and received_ts < ?)",
         [cutoff],
       )
+      db.run(
+        "delete from attachment_fts where message_id in (select id from messages where received_ts > 0 and received_ts < ?)",
+        [cutoff],
+      )
+      db.run(
+        "delete from attachment_text where message_id in (select id from messages where received_ts > 0 and received_ts < ?)",
+        [cutoff],
+      )
       db.run("delete from messages where received_ts > 0 and received_ts < ?", [cutoff])
       const overflow = db
         .query("select id from messages order by received_ts desc limit -1 offset ?")
         .all(maxMessages) as Array<{ id: string }>
       for (const { id } of overflow) {
         dropFts.run(id)
+        dropAttachment(id)
         db.run("delete from bodies where message_id = ?", [id])
         db.run("delete from messages where id = ?", [id])
       }
-      // Sweep bodies whose message vanished (tombstoned or pruned by another path).
+      // Sweep bodies/attachments whose message vanished (tombstoned or pruned by another path).
       db.run("delete from bodies where message_id not in (select id from messages)")
+      db.run("delete from attachment_fts where message_id not in (select id from messages)")
+      db.run("delete from attachment_text where message_id not in (select id from messages)")
     },
     close() {
       db.close()

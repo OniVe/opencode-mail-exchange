@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks"
+import { sanitizeText } from "./attachments"
 import type { MailService } from "./service"
 import type { MailBackend, OutgoingMessage } from "./types"
 
@@ -27,9 +28,18 @@ const describeError = (error: unknown): string => {
   if (status === 413)
     return "attachment too large (HTTP 413: request exceeded the EWS/IIS limit, ~40 MB per attachment)"
   const rawCode = typed.ErrorCode ?? typed.response?.ErrorCode
-  const code = textOf(typed.code) ?? (typeof rawCode === "number" ? `ErrorCode ${rawCode}` : textOf(rawCode))
-  const message =
-    textOf(typed.Message) ?? textOf(typed.message) ?? (error instanceof Error ? error.message : String(error))
+  const rawCodeText = textOf(typed.code) ?? (typeof rawCode === "number" ? `ErrorCode ${rawCode}` : textOf(rawCode))
+  const code = rawCodeText ? [...sanitizeText(rawCodeText)].slice(0, 80).join("") : undefined
+  const raw =
+    textOf(typed.Message) ??
+    textOf(typed.message) ??
+    (error instanceof Error ? error.message : typeof error === "string" ? error : "")
+  // Some library errors carry a stack in `message`/String(); never leak paths, frames or control chars.
+  const cleaned = sanitizeText(raw.split(/\r?\n/)[0] ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+  // Slice by Unicode code points so a surrogate pair is never split.
+  const message = [...cleaned].slice(0, 500).join("") || "EWS error"
   return code ? `${message} (${code})` : message
 }
 
@@ -228,6 +238,98 @@ export async function registerTools(
         const typed = input as AccountInput & { id: string }
         try {
           return { content: json(await run(typed, (backend) => backend.getMessage({ id: typed.id }))) }
+        } catch (error) {
+          return failure(error)
+        }
+      },
+    })
+
+    add({
+      name: "read_attachment",
+      description:
+        "List attachments of one message, or read an attachment as text. Without attachmentId/index returns the attachment metadata list; with index (position in the current list) or attachmentId extracts text from .doc/.docx, .xls/.xlsx, .pdf or plain text. Scanned PDFs are not OCRed; use attachmentId for stable re-reads.",
+      input: {
+        type: "object",
+        properties: {
+          account: accountField,
+          messageId: {
+            type: "string",
+            minLength: 1,
+            maxLength: 2048,
+            description: "EWS item id from mail_list/mail_search",
+          },
+          attachmentId: {
+            type: "string",
+            minLength: 1,
+            maxLength: 8192,
+            description: "Attachment id from the metadata list (alternative to index)",
+          },
+          index: {
+            type: "integer",
+            minimum: 0,
+            maximum: 999,
+            description: "Zero-based position in the current attachment list (use attachmentId for stable re-reads)",
+          },
+          maxChars: {
+            type: "integer",
+            minimum: 1000,
+            maximum: 500000,
+            description: "Maximum extracted text length in characters (default 100000)",
+          },
+        },
+        required: ["messageId"],
+        additionalProperties: false,
+      },
+      options: { namespace: "mail", codemode, permission: "mail.read" },
+      execute: async (input) => {
+        const typed = input as AccountInput & {
+          messageId?: unknown
+          attachmentId?: unknown
+          index?: unknown
+          maxChars?: unknown
+        }
+        try {
+          if (typeof typed.messageId !== "string" || typed.messageId.trim() === "") {
+            throw new Error("messageId must be a non-empty string")
+          }
+          const messageId = typed.messageId
+          const attachmentId =
+            typeof typed.attachmentId === "string" && typed.attachmentId.trim() !== "" ? typed.attachmentId : undefined
+          if (typed.attachmentId !== undefined && attachmentId === undefined) {
+            throw new Error("attachmentId must be a non-empty string")
+          }
+          const hasIndex = typed.index !== undefined
+          if (attachmentId && hasIndex) throw new Error("provide either attachmentId or index, not both")
+          if (!attachmentId && !hasIndex) {
+            return { content: json(await run(typed, (backend) => backend.listAttachments({ id: messageId }))) }
+          }
+          let index: number | undefined
+          if (hasIndex) {
+            const value =
+              typeof typed.index === "number"
+                ? typed.index
+                : typeof typed.index === "string"
+                  ? Number(typed.index)
+                  : Number.NaN
+            if (!Number.isInteger(value) || value < 0 || value > 999) {
+              throw new Error("index must be an integer from 0 to 999")
+            }
+            index = value
+          }
+          const maxChars = clampInt(typed.maxChars, 100_000, 1_000, 500_000)
+          return {
+            content: json(
+              await run(typed, (backend) =>
+                backend.readAttachment({
+                  id: messageId,
+                  attachmentId,
+                  index,
+                  maxChars,
+                  signal: currentSignal.getStore(),
+                }),
+              ),
+            ),
+          }
         } catch (error) {
           return failure(error)
         }

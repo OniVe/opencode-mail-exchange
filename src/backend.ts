@@ -1,5 +1,6 @@
 import {
   AffectedTaskOccurrence,
+  type Attachment,
   BasePropertySet,
   BatchServiceResponseException,
   BodyType,
@@ -11,6 +12,7 @@ import {
   EmailAddress,
   EmailMessage,
   EmailMessageSchema,
+  FileAttachment,
   FolderId,
   FolderSchema,
   FolderView,
@@ -28,6 +30,16 @@ import {
   SyncFolderItemsScope,
   WellKnownFolderName,
 } from "ews-javascript-api"
+import {
+  DEFAULT_MAX_CHARS,
+  displayAttachmentName,
+  extractAttachmentText,
+  MAX_MAX_CHARS,
+  MAX_READ_ATTACHMENT_BYTES,
+  MIN_MAX_CHARS,
+  safeAttachmentName,
+  truncateAttachmentText,
+} from "./attachments"
 import type { MailConfig } from "./config"
 import {
   address,
@@ -43,6 +55,8 @@ import {
 import type { Store } from "./store"
 import { isImpossibleDateQuery } from "./store"
 import type {
+  AttachmentInfo,
+  AttachmentText,
   CalendarEvent,
   ContactDto,
   DeleteResult,
@@ -70,6 +84,8 @@ const DETAILS_PROPERTY_SET = new PropertySet(BasePropertySet.IdOnly, [
   ItemSchema.HasAttachments,
   ItemSchema.Attachments,
 ])
+
+const ATTACHMENT_PROPERTY_SET = new PropertySet(BasePropertySet.IdOnly, [ItemSchema.Attachments])
 
 const MAX_ATTACHMENTS = 10
 const MAX_ATTACHMENT_BYTES = 40 * 1024 * 1024
@@ -150,6 +166,7 @@ export function mergeSearchResults(
       hasAttachments: existing.hasAttachments || message.hasAttachments,
       size: message.size ?? existing.size,
       attachmentCount: message.attachmentCount ?? existing.attachmentCount,
+      attachmentMatch: existing.attachmentMatch ?? message.attachmentMatch,
     })
   }
   return [...byId.values()]
@@ -275,6 +292,52 @@ const checkItemId = (id: unknown): string => {
     throw new Error(`item id is too long: ${value.length} > ${MAX_ITEM_ID_LENGTH}`)
   }
   return value
+}
+
+const MAX_ATTACHMENT_ID_LENGTH = 8_192
+const ATTACHMENT_ID_PATTERN = /^[A-Za-z0-9+/=_-]+$/
+
+const checkAttachmentId = (id: unknown): string => {
+  const value = typeof id === "string" ? id.trim() : ""
+  if (!value || !ATTACHMENT_ID_PATTERN.test(value)) {
+    throw new Error(`invalid attachment id: ${JSON.stringify(id)}`)
+  }
+  if (value.length > MAX_ATTACHMENT_ID_LENGTH) {
+    throw new Error(`attachment id is too long: ${value.length} > ${MAX_ATTACHMENT_ID_LENGTH}`)
+  }
+  return value
+}
+
+interface EwsAttachmentInfo {
+  Id?: string
+  Name?: string
+  FileName?: string
+  ContentType?: string
+  Size?: number
+  IsInline?: boolean
+}
+
+export const attachmentInfo = (attachment: EwsAttachmentInfo, kind: "file" | "item"): AttachmentInfo => {
+  const size = safe(() => Number(attachment.Size), 0)
+  return {
+    id: safe(() => attachment.Id ?? "", ""),
+    name: displayAttachmentName(safe(() => attachment.FileName || attachment.Name || "", "")),
+    contentType: displayAttachmentName(safe(() => attachment.ContentType ?? "", "")),
+    size: Number.isFinite(size) && size > 0 ? size : 0,
+    isInline: attachment.IsInline === true,
+    kind,
+  }
+}
+
+const attachmentKind = (attachment: Attachment): "file" | "item" => {
+  if (attachment instanceof FileAttachment) return "file"
+  const file = attachment as Attachment & { FileName?: string }
+  return safe(() => typeof file.FileName === "string" && file.FileName !== "", false) ? "file" : "item"
+}
+
+const limitAttachment = (value: AttachmentText, maxChars: number): AttachmentText => {
+  const cut = truncateAttachmentText(value.text, maxChars)
+  return { ...value, text: cut.text, truncated: value.truncated || cut.truncated }
 }
 
 const resultLabel = (result: ServiceResult): string =>
@@ -454,6 +517,123 @@ export class EwsBackend implements MailBackend {
     if (metadataPersisted) this.markMetadataChecked([id])
 
     return { ...summary, cc, body, bodyType, truncated, fetched: true, bodyCached }
+  }
+
+  private async loadAttachmentCollection(id: string): Promise<Attachment[]> {
+    const message = await EmailMessage.Bind(this.service, new ItemId(id), ATTACHMENT_PROPERTY_SET)
+    try {
+      const collection = message.Attachments
+      if (!collection) throw new Error("attachments property is unavailable")
+      return collection.GetEnumerator()
+    } catch (error) {
+      throw new Error(`cannot read attachments: ${errorText(error)}`)
+    }
+  }
+
+  async listAttachments(input: { id: string }): Promise<AttachmentInfo[]> {
+    const id = checkItemId(input.id)
+    const attachments = await this.loadAttachmentCollection(id)
+    return attachments.map((attachment) =>
+      attachmentInfo(attachment as unknown as EwsAttachmentInfo, attachmentKind(attachment)),
+    )
+  }
+
+  async readAttachment(input: {
+    id: string
+    attachmentId?: string
+    index?: number
+    maxChars?: number
+    signal?: AbortSignal
+  }): Promise<AttachmentText> {
+    const id = checkItemId(input.id)
+    if (input.attachmentId !== undefined && input.index !== undefined) {
+      throw new Error("provide either attachmentId or index, not both")
+    }
+    const cacheEnabled = this.store !== undefined && this.config.storage === "full"
+    const requested = Math.min(
+      Math.max(Math.trunc(input.maxChars ?? DEFAULT_MAX_CHARS) || DEFAULT_MAX_CHARS, MIN_MAX_CHARS),
+      MAX_MAX_CHARS,
+    )
+    if (cacheEnabled && input.attachmentId !== undefined) {
+      const cached = this.store?.getAttachmentText(id, checkAttachmentId(input.attachmentId))
+      if (cached) {
+        input.signal?.throwIfAborted()
+        return limitAttachment(cached, requested)
+      }
+    }
+    const attachments = await this.loadAttachmentCollection(id)
+    if (attachments.length === 0) throw new Error("message has no attachments")
+
+    let position = -1
+    if (input.attachmentId !== undefined) {
+      const wanted = checkAttachmentId(input.attachmentId)
+      position = attachments.findIndex(
+        (attachment) => safe(() => (attachment as unknown as EwsAttachmentInfo).Id ?? "", "") === wanted,
+      )
+      if (position < 0) throw new Error(`attachment not found: ${wanted}`)
+    } else {
+      const index = input.index
+      if (index === undefined || !Number.isInteger(index) || index < 0 || index >= attachments.length) {
+        throw new Error(`attachment index must be an integer from 0 to ${attachments.length - 1}`)
+      }
+      position = index
+    }
+
+    const selected = attachments[position]
+    if (!selected) throw new Error("attachment not found")
+    const info = attachmentInfo(selected as unknown as EwsAttachmentInfo, attachmentKind(selected))
+    if (info.kind !== "file") throw new Error("attachment is an embedded message, not a file")
+    if (cacheEnabled) {
+      const cached = info.id === "" ? undefined : this.store?.getAttachmentText(id, info.id)
+      if (cached) {
+        input.signal?.throwIfAborted()
+        return limitAttachment(cached, requested)
+      }
+    }
+    if (info.size > MAX_READ_ATTACHMENT_BYTES) {
+      throw new Error(
+        `attachment is too large to read: ${safeAttachmentName(info.name)} is ${Math.ceil(info.size / 1024 / 1024)} MB ` +
+          `(max ${MAX_READ_ATTACHMENT_BYTES / 1024 / 1024} MB)`,
+      )
+    }
+
+    const file = selected as FileAttachment
+    await file.Load()
+    input.signal?.throwIfAborted()
+    const content = safe(() => file.Base64Content ?? "", "")
+    if (content === "") throw new Error("attachment content is empty or unavailable")
+    if (content.length > Math.ceil(MAX_READ_ATTACHMENT_BYTES / 3) * 4 + 8) {
+      throw new Error(
+        `attachment is too large to read: ${Math.ceil((content.length * 3) / 4 / 1024 / 1024)} MB ` +
+          `(max ${MAX_READ_ATTACHMENT_BYTES / 1024 / 1024} MB)`,
+      )
+    }
+    const data = Buffer.from(content, "base64")
+    if (data.length > MAX_READ_ATTACHMENT_BYTES) {
+      throw new Error(
+        `attachment is too large to read: ${Math.ceil(data.length / 1024 / 1024)} MB ` +
+          `(max ${MAX_READ_ATTACHMENT_BYTES / 1024 / 1024} MB)`,
+      )
+    }
+    const extracted = await extractAttachmentText({
+      filename: info.name || "attachment",
+      contentType: info.contentType,
+      data,
+      maxChars: cacheEnabled ? MAX_MAX_CHARS : requested,
+      ...(input.signal ? { signal: input.signal } : {}),
+    })
+    const result: AttachmentText = {
+      messageId: id,
+      attachment: info,
+      kind: extracted.kind,
+      text: extracted.text,
+      truncated: extracted.truncated,
+      ...(extracted.pages !== undefined ? { pages: extracted.pages } : {}),
+      ...(extracted.sheets ? { sheets: extracted.sheets } : {}),
+      ...(extracted.note ? { note: extracted.note } : {}),
+    }
+    if (cacheEnabled && info.id !== "") this.store?.putAttachmentText(result)
+    return limitAttachment(result, requested)
   }
 
   async deleteMessages(input: { ids: string[]; hard?: boolean }): Promise<DeleteResult> {
