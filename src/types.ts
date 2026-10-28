@@ -172,7 +172,7 @@ export interface MailBackend {
   /** Permanently empties Deleted Items (EWS `EmptyFolder` + `HardDelete`). */
   emptyDeleted(): Promise<{ emptied: true }>
   /** EWS `Send` returns no item id: the result only confirms the server accepted the message. */
-  send(input: OutgoingMessage): Promise<{ sent: true }>
+  send(input: OutgoingMessage & { saveCopy?: boolean }): Promise<{ sent: true }>
   saveDraft(input: OutgoingMessage): Promise<{ id: string }>
   listCalendar(input: { from?: string; to?: string; limit: number }): Promise<CalendarEvent[]>
   listContacts(input: { query?: string; limit: number }): Promise<ContactDto[]>

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { ServiceResult } from "ews-javascript-api"
+import { ServiceResult, WellKnownFolderName } from "ews-javascript-api"
 import { EwsBackend, escapeXml, parseRecipient } from "../src/backend"
 import type { MailConfig } from "../src/config"
 import { createEwsService, toSummary } from "../src/ews"
@@ -681,15 +681,26 @@ describe("send result", () => {
     // A real ExchangeService is needed to build the message; only the wire call is stubbed.
     const service = createEwsService(cfg)
     let created = 0
-    ;(service as unknown as { CreateItem: unknown }).CreateItem = async (item: unknown) => {
+    const dispositions: unknown[] = []
+    const parents: unknown[] = []
+    ;(service as unknown as { CreateItem: unknown }).CreateItem = async (...args: unknown[]) => {
       created++
-      return item
+      dispositions.push(args[2])
+      parents.push(args[1])
+      return args[0]
     }
     ;(backend as unknown as { service: unknown }).service = service
 
     const result = await backend.send({ to: ["bot@example.com"], subject: "s", body: "b" })
     expect(result).toEqual({ sent: true })
-    expect(created).toBe(1)
+    const saved = await backend.send({ to: ["bot@example.com"], subject: "s", body: "b", saveCopy: true })
+    expect(saved).toEqual({ sent: true })
+    expect(created).toBe(2)
+    expect(dispositions).toEqual([2, 1])
+    expect(parents.map((parent) => (parent as { FolderName?: number } | null)?.FolderName ?? null)).toEqual([
+      null,
+      WellKnownFolderName.SentItems,
+    ])
 
     backend.close()
     rmSync(cfg.dataDir, { recursive: true, force: true })

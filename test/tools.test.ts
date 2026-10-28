@@ -10,6 +10,7 @@ let lastAttachmentRead:
   | { id: string; attachmentId?: string; index?: number; maxChars?: number; sheet?: string }
   | undefined
 let lastAttachmentSave: { id: string; attachmentId?: string; index?: number } | undefined
+let lastSend: { saveCopy?: boolean } | undefined
 
 const backend: MailBackend = {
   listFolders: async () => [{ id: "1", name: "Inbox", unread: 2, total: 3 }],
@@ -78,7 +79,10 @@ const backend: MailBackend = {
       pages: 1,
     }
   },
-  send: async () => ({ sent: true }),
+  send: async (input) => {
+    lastSend = input
+    return { sent: true }
+  },
   saveDraft: async () => ({ id: "draft" }),
   deleteMessages: async (input) => {
     lastDelete = { ids: input.ids, hard: input.hard }
@@ -434,10 +438,15 @@ describe("tool error surfacing", () => {
   test("mail_send returns {sent: true} (no item id from EWS Send)", async () => {
     // The module-level stub backend answers send() with {sent: true}.
     const tools = await capture(new Error("unused"), service)
-    const result = await tools
-      .find((tool) => tool.name === "send")
-      ?.execute({ to: ["bot@example.com"], subject: "s", body: "b" })
+    const send = tools.find((tool) => tool.name === "send")
+    const result = await send?.execute({ to: ["bot@example.com"], subject: "s", body: "b" })
     expect(JSON.parse(result?.content ?? "null")).toEqual({ sent: true })
+    expect(lastSend?.saveCopy).toBe(false)
+    await send?.execute({ to: ["bot@example.com"], subject: "s", body: "b", saveCopy: true })
+    expect(lastSend?.saveCopy).toBe(true)
+    expect(
+      (await send?.execute({ to: ["bot@example.com"], subject: "s", body: "b", saveCopy: "yes" }))?.content,
+    ).toContain("saveCopy must be a boolean")
   })
 
   test("allowSend=false is an ERROR result, not a thrown tool", async () => {
