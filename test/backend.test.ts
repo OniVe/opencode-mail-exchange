@@ -693,13 +693,14 @@ describe("send result", () => {
 
     const result = await backend.send({ to: ["bot@example.com"], subject: "s", body: "b" })
     expect(result).toEqual({ sent: true })
-    const saved = await backend.send({ to: ["bot@example.com"], subject: "s", body: "b", saveCopy: true })
-    expect(saved).toEqual({ sent: true })
+    const plain = await backend.send({ to: ["bot@example.com"], subject: "s", body: "b", saveCopy: false })
+    expect(plain).toEqual({ sent: true })
     expect(created).toBe(2)
-    expect(dispositions).toEqual([2, 1])
+    // Default: copy in Sent Items; saveCopy:false: SendOnly without a destination.
+    expect(dispositions).toEqual([1, 2])
     expect(parents.map((parent) => (parent as { FolderName?: number } | null)?.FolderName ?? null)).toEqual([
-      null,
       WellKnownFolderName.SentItems,
+      null,
     ])
 
     backend.close()

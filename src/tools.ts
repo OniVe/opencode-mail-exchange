@@ -529,14 +529,14 @@ export async function registerTools(
     add({
       name: "send",
       description:
-        "Send an email immediately. Requires the `mail.send` permission to be allowed by the user's rules. Set saveCopy to also keep a copy in Sent Items (EWS SendAndSaveCopy).",
+        "Send an email immediately. Requires the `mail.send` permission to be allowed by the user's rules. A copy is kept in Sent Items by default (EWS SendAndSaveCopy); set saveCopy: false to send without a copy.",
       input: {
         ...outgoingSchema,
         properties: {
           ...outgoingSchema.properties,
           saveCopy: {
             type: "boolean",
-            description: "Save a copy in Sent Items (SendAndSaveCopy); default false",
+            description: "Save a copy in Sent Items (SendAndSaveCopy); default true",
           },
         },
       },
@@ -548,12 +548,13 @@ export async function registerTools(
           if (!service.config(typed.account).allowSend) {
             return { content: "ERROR: sending is disabled (allowSend=false)", metadata: { error: true } }
           }
-          const saveCopy = (typed as { saveCopy?: unknown }).saveCopy
-          if (saveCopy !== undefined && typeof saveCopy !== "boolean") {
+          const requested = (typed as { saveCopy?: unknown }).saveCopy
+          if (requested !== undefined && typeof requested !== "boolean") {
             throw new Error("saveCopy must be a boolean")
           }
+          const saveCopy = requested !== false
           return {
-            content: json(await run(typed, (backend) => backend.send({ ...typed, saveCopy: saveCopy === true }))),
+            content: json(await run(typed, (backend) => backend.send({ ...typed, saveCopy }))),
           }
         } catch (error) {
           return failure(error)

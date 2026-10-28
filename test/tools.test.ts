@@ -441,6 +441,8 @@ describe("tool error surfacing", () => {
     const send = tools.find((tool) => tool.name === "send")
     const result = await send?.execute({ to: ["bot@example.com"], subject: "s", body: "b" })
     expect(JSON.parse(result?.content ?? "null")).toEqual({ sent: true })
+    expect(lastSend?.saveCopy).toBe(true)
+    await send?.execute({ to: ["bot@example.com"], subject: "s", body: "b", saveCopy: false })
     expect(lastSend?.saveCopy).toBe(false)
     await send?.execute({ to: ["bot@example.com"], subject: "s", body: "b", saveCopy: true })
     expect(lastSend?.saveCopy).toBe(true)

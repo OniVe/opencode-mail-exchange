@@ -816,7 +816,7 @@ export class EwsBackend implements MailBackend {
   async send(input: OutgoingMessage & { saveCopy?: boolean }): Promise<{ sent: true }> {
     const message = this.buildMessage(input)
     // EWS does not return an item id for `Send`: only the acceptance of the request is known.
-    if (input.saveCopy === true) await message.SendAndSaveCopy()
+    if (input.saveCopy !== false) await message.SendAndSaveCopy()
     else await message.Send()
     return { sent: true }
   }

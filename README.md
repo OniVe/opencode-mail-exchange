@@ -205,7 +205,7 @@ Top-level options are inherited by `accounts[]`; per-account values win, except 
 | `mail_empty_deleted` | permanently delete top-level items in Deleted Items (subfolders remain); requires `confirm: true` |
 | `mail_sync` | incremental `SyncFolderItems`; `{synced, complete}` |
 | `mail_draft` | create a draft |
-| `mail_send` | send; `saveCopy: true` keeps a copy in Sent Items (`SendAndSaveCopy`); `{sent: true}` (EWS returns no id) |
+| `mail_send` | send; a copy is kept in Sent Items by default (`SendAndSaveCopy`), `saveCopy: false` disables it; `{sent: true}` (EWS returns no id) |
 | `mail_calendar` | events in a range |
 | `mail_contacts` | contacts; `query` scans up to 500 contacts page by page |
 
@@ -316,7 +316,8 @@ A failed tool is a successful `Result` with `content: "ERROR: ..."` and `metadat
 timeout, TLS and cancellation are mapped to actionable text.
 
 `mail_send` is not idempotent: a timeout or cancellation after `Send()`/`SendAndSaveCopy()` leaves delivery unknown;
-retrying may duplicate the message. `saveCopy: true` saves a copy in Sent Items only when the send succeeds. Prefer
+retrying may duplicate the message. A copy is saved in Sent Items by default and only when the send succeeds; pass
+`saveCopy: false` to send without it. Prefer
 `mail_draft` + explicit confirmation.
 
 ### Sync
